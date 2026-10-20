@@ -1,7 +1,9 @@
-// Signer GUI — polished egui/eframe app: token management, request approval, audit log.
-// Run: cargo run --bin gui
+// Signer GUI — egui/eframe 0.36 on fastframe: tray, resident shell, native
+// text rendering, JSON palettes. Run: cargo run --bin gui
 #[path = "../bridge.rs"]
 mod bridge;
+#[path = "../icons.rs"]
+mod icons;
 #[path = "../pkcs11.rs"]
 mod pkcs11;
 #[path = "../theme.rs"]
@@ -11,6 +13,9 @@ mod timeutil;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use eframe::egui;
+use fastframe_fonts::Weight;
+use fastframe_shell::{Closed, Headless, Resident};
+use fastframe_tray::{Config, Event, MenuItem, Tray};
 use pkcs11::TokenManager;
 use sha2::{Digest, Sha256};
 use std::sync::mpsc::{Receiver, Sender};
@@ -92,7 +97,7 @@ impl Nav {
 
 type GuiRequest = (serde_json::Value, Sender<serde_json::Value>);
 
-struct SignerApp {
+struct App {
     manager: Option<(String, TokenManager)>,
     certs: Vec<CertRow>,
     selected: usize,
@@ -108,6 +113,14 @@ struct SignerApp {
     signature_cn: String,
     bridge_port: Option<u16>,
     history: Vec<String>,
+    // resident-shell state
+    hide_intent: bool,
+    quit_requested: bool,
+    wants_show: bool,
+    tray: Option<Tray>,
+    waker: fastframe_shell::Waker,
+    ctx: Option<egui::Context>,
+    rendering: Option<fastframe_text::TextRendering>,
 }
 
 // ---------------------------------------------------------------- helpers
@@ -147,14 +160,14 @@ fn avatar(ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32) {
         center,
         egui::Align2::CENTER_CENTER,
         text,
-        egui::FontId::new(size * 0.38, egui::FontFamily::Proportional),
+        Weight::SemiBold.font_id(size * 0.38),
         color,
     );
 }
 
 /// Small tinted pill with a label.
 fn chip(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
-    let font = egui::FontId::new(11.0, egui::FontFamily::Proportional);
+    let font = Weight::Medium.font_id(11.0);
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_string(), font.clone(), color);
@@ -176,19 +189,24 @@ fn chip(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
 fn kv(ui: &mut egui::Ui, k: &str, v: &str, mono: bool) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(k).color(text_faint()).size(12.0));
-        let font = if mono {
+        let family = if mono {
             egui::FontFamily::Monospace
         } else {
             egui::FontFamily::Proportional
         };
-        ui.label(egui::RichText::new(v).family(font).color(text()).size(12.5));
+        ui.label(
+            egui::RichText::new(v)
+                .family(family)
+                .color(text())
+                .size(12.5),
+        );
     });
 }
 
 // ---------------------------------------------------------------- app
 
-impl SignerApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+impl App {
+    fn new(waker: &fastframe_shell::Waker) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<GuiRequest>();
         let bridge_port = std::thread::spawn(move || bridge::serve_gui(tx).ok())
             .join()
@@ -211,10 +229,70 @@ impl SignerApp {
             signature_cn: String::new(),
             bridge_port,
             history: Vec::new(),
+            hide_intent: false,
+            quit_requested: false,
+            wants_show: false,
+            tray: None,
+            waker: waker.clone(),
+            ctx: None,
+            rendering: None,
         };
-        app.push_log(Level::Info, "Signer GUI started".to_string());
+
+        // The tray is what keeps the app reachable when the window is closed.
+        let wake = waker.clone();
+        let tray = Tray::spawn(
+            Config {
+                id: "signer",
+                title: "Signer".to_string(),
+                icon: icons::app_icon_rgba,
+                template_icon: None,
+                themed_icon: false,
+                menu: vec![
+                    MenuItem::action("show", "Show Signer"),
+                    MenuItem::action("requests", "Pending requests"),
+                    MenuItem::Separator,
+                    MenuItem::action("quit", "Quit Signer"),
+                ],
+            },
+            move || wake.wake(),
+        );
+        app.tray = tray;
+
+        app.push_log(Level::Info, "Signer started".to_string());
         app.connect();
         app
+    }
+
+    /// Called for every window: fonts, the desktop's text rendering, theme.
+    fn attach(&mut self, ctx: &egui::Context) {
+        self.ctx = Some(ctx.clone());
+
+        // Fonts: Inter for the interface, with the desktop's hinting and
+        // antialiasing so the text matches the rest of the machine.
+        let rendering = fastframe_text::detect();
+        let mut fonts = fastframe_fonts::FontSetup::default().definitions();
+        rendering.apply_to(&mut fonts);
+        ctx.set_fonts(fonts);
+        self.rendering = Some(rendering);
+
+        // Palette: the user's own if there is one, our defaults otherwise.
+        let (mut dark, mut light) = theme::palettes();
+        if let Some(custom) = theme::load_user_palette() {
+            match custom.base {
+                fastframe_theme::Base::Dark => dark = custom,
+                fastframe_theme::Base::Light => light = custom,
+            }
+        }
+        theme::install(dark, light, theme::active_base());
+        self.apply_theme(ctx);
+    }
+
+    /// (Re)apply the palette and the desktop's text rendering.
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        theme::apply(ctx);
+        if let Some(rendering) = &self.rendering {
+            ctx.all_styles_mut(|style| rendering.apply_to_visuals(&mut style.visuals));
+        }
     }
 
     fn push_log(&mut self, level: Level, text: String) {
@@ -254,11 +332,8 @@ impl SignerApp {
                     let n = rows.len();
                     self.certs = rows;
                     self.selected = 0;
-                    self.manager = Some((module.clone(), tm));
-                    self.set_status(
-                        Level::Ok,
-                        format!("Token connected · {} certificate(s) found", n),
-                    );
+                    self.manager = Some((module, tm));
+                    self.set_status(Level::Ok, format!("Token connected · {} certificate(s)", n));
                 }
                 Err(e) => {
                     self.manager = None;
@@ -341,7 +416,7 @@ impl SignerApp {
         }
 
         self.pending = Some(Pending {
-            portal,
+            portal: portal.clone(),
             bytes: bytes.len(),
             hash_hex,
             received: now_clock(),
@@ -350,6 +425,11 @@ impl SignerApp {
             resp,
         });
         self.nav = Nav::Requests;
+        self.wants_show = true;
+        if let Some(tray) = self.tray.as_mut() {
+            tray.set_tooltip(format!("Signer\nWaiting for approval: {}", portal));
+        }
+        self.waker.wake();
     }
 
     fn approve_pending(&mut self) {
@@ -399,6 +479,9 @@ impl SignerApp {
                 self.set_status(Level::Err, format!("Sign failed: {}", e));
             }
         }
+        if let Some(tray) = self.tray.as_mut() {
+            tray.set_tooltip("Signer");
+        }
     }
 
     fn cancel(&mut self) {
@@ -409,18 +492,100 @@ impl SignerApp {
             }));
             self.set_status(Level::Warn, format!("Request from {} cancelled", p.portal));
         }
+        if let Some(tray) = self.tray.as_mut() {
+            tray.set_tooltip("Signer");
+        }
+    }
+
+    /// Take requests that arrived since the last frame.
+    fn pump_requests(&mut self) {
+        while let Ok((req, resp)) = self.gui_rx.try_recv() {
+            self.accept_request(req, resp);
+        }
+    }
+
+    /// Handle tray clicks.
+    fn drain_tray(&mut self) {
+        let Some(tray) = &self.tray else { return };
+        for event in tray.events() {
+            match event {
+                Event::Menu("quit") => {
+                    self.quit_requested = true;
+                    self.wants_show = false;
+                }
+                Event::Menu("show") | Event::Toggle | Event::Show => {
+                    self.wants_show = true;
+                    if let Some(ctx) = &self.ctx {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                            egui::UserAttentionType::Informational,
+                        ));
+                    }
+                }
+                Event::Menu("requests") => {
+                    self.nav = Nav::Requests;
+                    self.wants_show = true;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// ------------------------------------------------- resident shell (fastframe)
+
+impl Resident for App {
+    fn closed(&self) -> Closed {
+        if !self.quit_requested && self.hide_intent {
+            Closed::Hide
+        } else {
+            Closed::Quit
+        }
+    }
+
+    fn window_gone(&mut self) {
+        self.hide_intent = false;
+        self.wants_show = false;
+        self.ctx = None;
+    }
+
+    fn headless_frame(&mut self, ctx: &egui::Context) -> Headless {
+        self.ctx = Some(ctx.clone());
+        self.pump_requests();
+        self.drain_tray();
+        if self.quit_requested {
+            return Headless::Quit;
+        }
+        if self.wants_show {
+            self.wants_show = false;
+            return Headless::Show;
+        }
+        Headless::Wait
+    }
+
+    fn start_hidden(&mut self) -> bool {
+        false
+    }
+
+    fn shutdown(&mut self) {
+        self.push_log(Level::Info, "Signer stopped".to_string());
     }
 }
 
 // ---------------------------------------------------------------- render
 
-impl eframe::App for SignerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        theme::apply(ctx);
-
-        while let Ok((req, resp)) = self.gui_rx.try_recv() {
-            self.accept_request(req, resp);
+impl eframe::App for App {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Closing the window keeps the app alive in the tray: the signing
+        // bridge must survive so a portal can still reach it.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_requested {
+            self.hide_intent = true;
         }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.pump_requests();
+        self.drain_tray();
 
         // TEST MODE: auto-connect and auto-approve when SIGNER_GUI_TEST_PIN is set.
         if let Ok(pin) = std::env::var("SIGNER_GUI_TEST_PIN") {
@@ -433,18 +598,18 @@ impl eframe::App for SignerApp {
             }
         }
 
-        egui::TopBottomPanel::top("top")
-            .exact_height(60.0)
+        egui::Panel::top("top")
+            .exact_size(60.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::surface())
                     .stroke(egui::Stroke::new(1.0_f32, border()))
                     .inner_margin(egui::Margin::symmetric(16, 12)),
             )
-            .show(ctx, |ui| self.top_bar(ui));
+            .show(ui, |ui| self.top_bar(ui));
 
-        egui::SidePanel::left("rail")
-            .exact_width(238.0)
+        egui::Panel::left("rail")
+            .exact_size(238.0)
             .resizable(false)
             .frame(
                 egui::Frame::new()
@@ -452,17 +617,17 @@ impl eframe::App for SignerApp {
                     .stroke(egui::Stroke::new(0.0_f32, border()))
                     .inner_margin(egui::Margin::symmetric(12, 16)),
             )
-            .show(ctx, |ui| self.left_rail(ui));
+            .show(ui, |ui| self.left_rail(ui));
 
-        egui::TopBottomPanel::bottom("status")
-            .exact_height(32.0)
+        egui::Panel::bottom("status")
+            .exact_size(32.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::surface())
                     .stroke(egui::Stroke::new(1.0_f32, border()))
                     .inner_margin(egui::Margin::symmetric(16, 6)),
             )
-            .show(ctx, |ui| self.status_bar(ui));
+            .show(ui, |ui| self.status_bar(ui));
 
         egui::CentralPanel::default()
             .frame(
@@ -470,31 +635,30 @@ impl eframe::App for SignerApp {
                     .fill(theme::bg())
                     .inner_margin(egui::Margin::same(24)),
             )
-            .show(ctx, |ui| match self.nav {
+            .show(ui, |ui| match self.nav {
                 Nav::Requests => self.view_requests(ui),
                 Nav::Certificates => self.view_certificates(ui),
                 Nav::Sign => self.view_sign(ui),
                 Nav::Activity => self.view_activity(ui),
             });
 
-        let esc_pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let esc_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
         if esc_pressed && self.pending.is_some() {
             self.cancel();
         }
     }
 }
 
-impl SignerApp {
+impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            // Logo mark
             let (rect, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
             ui.painter().rect_filled(rect, 10.0, accent());
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "S",
-                egui::FontId::new(19.0, egui::FontFamily::Proportional),
+                Weight::Bold.font_id(19.0),
                 egui::Color32::WHITE,
             );
 
@@ -502,13 +666,12 @@ impl SignerApp {
                 ui.add_space(1.0);
                 ui.label(
                     egui::RichText::new("Signer")
-                        .size(17.0)
-                        .strong()
+                        .font(Weight::SemiBold.font_id(17.0))
                         .color(text()),
                 );
                 ui.label(
                     egui::RichText::new("India G2C · DSC signing")
-                        .size(11.0)
+                        .font(Weight::Regular.font_id(11.0))
                         .color(text_faint()),
                 );
             });
@@ -519,12 +682,25 @@ impl SignerApp {
                 if ui.button("Refresh token").clicked() {
                     self.connect();
                 }
+                let is_dark = theme::active_base() == fastframe_theme::Base::Dark;
+                if ui
+                    .button(if is_dark { "Light mode" } else { "Dark mode" })
+                    .clicked()
+                {
+                    theme::set_base(if is_dark {
+                        fastframe_theme::Base::Light
+                    } else {
+                        fastframe_theme::Base::Dark
+                    });
+                    let ctx = ui.ctx().clone();
+                    self.apply_theme(&ctx);
+                }
                 let (dot_col, label) = match (&self.manager, self.pending.is_some()) {
                     (Some(_), true) => (warn(), "Awaiting approval"),
                     (Some(_), false) => (ok(), "Ready"),
                     (None, _) => (err(), "No token"),
                 };
-                let font = egui::FontId::new(11.5, egui::FontFamily::Proportional);
+                let font = Weight::Medium.font_id(11.5);
                 let galley = ui
                     .painter()
                     .layout_no_wrap(label.to_string(), font.clone(), dot_col);
@@ -551,9 +727,8 @@ impl SignerApp {
     fn left_rail(&mut self, ui: &mut egui::Ui) {
         ui.label(
             egui::RichText::new("WORKSPACE")
-                .size(10.0)
-                .color(text_faint())
-                .strong(),
+                .font(Weight::SemiBold.font_id(10.0))
+                .color(text_faint()),
         );
         ui.add_space(6.0);
 
@@ -570,8 +745,6 @@ impl SignerApp {
             if selected {
                 ui.painter()
                     .rect_filled(rect, theme::radius_sm(), theme::tint(accent(), 40));
-                ui.painter()
-                    .rect_filled(rect, theme::radius_sm(), theme::tint(accent(), 40));
                 let bar = egui::Rect::from_min_size(
                     rect.left_top() + egui::vec2(0.0, 9.0),
                     egui::vec2(3.0, 20.0),
@@ -586,7 +759,7 @@ impl SignerApp {
                 rect.left_center() + egui::vec2(14.0, 0.0),
                 egui::Align2::LEFT_CENTER,
                 nav.title(),
-                egui::FontId::new(13.0, egui::FontFamily::Proportional),
+                Weight::Medium.font_id(13.0),
                 col,
             );
             if badge {
@@ -604,9 +777,8 @@ impl SignerApp {
         ui.add_space(18.0);
         ui.label(
             egui::RichText::new("TOKEN")
-                .size(10.0)
-                .color(text_faint())
-                .strong(),
+                .font(Weight::SemiBold.font_id(10.0))
+                .color(text_faint()),
         );
         ui.add_space(6.0);
 
@@ -648,7 +820,7 @@ impl SignerApp {
             }
             ui.label(
                 egui::RichText::new("Signer 0.1.0")
-                    .size(10.0)
+                    .font(Weight::Regular.font_id(10.0))
                     .color(text_faint()),
             );
         });
@@ -673,8 +845,7 @@ impl SignerApp {
     fn view_header(&self, ui: &mut egui::Ui) {
         ui.label(
             egui::RichText::new(self.nav.title())
-                .size(23.0)
-                .strong()
+                .font(Weight::Bold.font_id(23.0))
                 .color(text()),
         );
         ui.label(
@@ -704,8 +875,7 @@ impl SignerApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("Signing request")
-                                .size(17.0)
-                                .strong()
+                                .font(Weight::SemiBold.font_id(17.0))
                                 .color(text()),
                         );
                         chip(ui, &portal, accent());
@@ -782,8 +952,8 @@ impl SignerApp {
                             [190.0, 40.0],
                             egui::Button::new(
                                 egui::RichText::new("Approve & Sign")
-                                    .color(egui::Color32::WHITE)
-                                    .size(13.5),
+                                    .font(Weight::SemiBold.font_id(13.5))
+                                    .color(egui::Color32::WHITE),
                             )
                             .fill(accent()),
                         );
@@ -806,19 +976,13 @@ impl SignerApp {
                 theme::card_frame(None).show(ui, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(10.0);
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
                         ui.painter().circle_filled(rect.center(), 26.0, theme::tint(ok(), 34));
                         ui.painter().circle_stroke(
                             rect.center(),
                             26.0,
                             egui::Stroke::new(1.0_f32, theme::tint(ok(), 110)),
-                        );
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "",
-                            egui::FontId::new(1.0, egui::FontFamily::Proportional),
-                            ok(),
                         );
                         let c = rect.center();
                         let check = vec![
@@ -831,8 +995,7 @@ impl SignerApp {
                         ui.add_space(10.0);
                         ui.label(
                             egui::RichText::new("All clear")
-                                .size(18.0)
-                                .strong()
+                                .font(Weight::SemiBold.font_id(18.0))
                                 .color(text()),
                         );
                         ui.label(
@@ -856,8 +1019,7 @@ impl SignerApp {
                     ui.add_space(16.0);
                     ui.label(
                         egui::RichText::new("Recent requests")
-                            .size(13.0)
-                            .strong()
+                            .font(Weight::SemiBold.font_id(13.0))
                             .color(text()),
                     );
                     ui.add_space(6.0);
@@ -926,7 +1088,7 @@ impl SignerApp {
                         av.center(),
                         egui::Align2::CENTER_CENTER,
                         initials(&c.cn),
-                        egui::FontId::new(14.0, egui::FontFamily::Proportional),
+                        Weight::SemiBold.font_id(14.0),
                         name_col,
                     );
 
@@ -934,25 +1096,24 @@ impl SignerApp {
                         av.right_top() + egui::vec2(12.0, 2.0),
                         egui::Align2::LEFT_TOP,
                         if c.cn.is_empty() { "(unnamed)" } else { &c.cn },
-                        egui::FontId::new(13.5, egui::FontFamily::Proportional),
+                        Weight::SemiBold.font_id(13.5),
                         text(),
                     );
                     ui.painter().text(
                         av.right_top() + egui::vec2(12.0, 20.0),
                         egui::Align2::LEFT_TOP,
                         c.token_label.clone(),
-                        egui::FontId::new(10.5, egui::FontFamily::Proportional),
+                        Weight::Regular.font_id(10.5),
                         text_faint(),
                     );
 
-                    // expiry chip
                     let (exp_txt, exp_col) = match days_until(&c.not_after) {
                         Some(d) if d < 0 => (format!("expired {}d ago", -d), err()),
                         Some(d) if d < 30 => (format!("expires in {}d", d), warn()),
                         Some(d) => (format!("{}d left", d), ok()),
                         None => ("expiry unknown".to_string(), text_dim()),
                     };
-                    let chip_font = egui::FontId::new(10.5, egui::FontFamily::Proportional);
+                    let chip_font = Weight::Medium.font_id(10.5);
                     let galley =
                         ui.painter()
                             .layout_no_wrap(exp_txt.clone(), chip_font.clone(), exp_col);
@@ -1001,8 +1162,7 @@ impl SignerApp {
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new("Certificate details")
-                                .size(14.0)
-                                .strong()
+                                .font(Weight::SemiBold.font_id(14.0))
                                 .color(text()),
                         );
                         ui.label(
@@ -1044,8 +1204,7 @@ impl SignerApp {
         theme::card_frame(None).show(ui, |ui| {
             ui.label(
                 egui::RichText::new("Manual signing")
-                    .size(14.0)
-                    .strong()
+                    .font(Weight::SemiBold.font_id(14.0))
                     .color(text()),
             );
             ui.label(
@@ -1085,8 +1244,8 @@ impl SignerApp {
                     [200.0, 38.0],
                     egui::Button::new(
                         egui::RichText::new("Sign with selected certificate")
-                            .color(egui::Color32::WHITE)
-                            .size(13.0),
+                            .font(Weight::SemiBold.font_id(13.0))
+                            .color(egui::Color32::WHITE),
                     )
                     .fill(accent()),
                 );
@@ -1109,8 +1268,7 @@ impl SignerApp {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("Signature")
-                            .size(14.0)
-                            .strong()
+                            .font(Weight::SemiBold.font_id(14.0))
                             .color(text()),
                     );
                     chip(ui, &self.signature_cn, accent2());
@@ -1134,8 +1292,7 @@ impl SignerApp {
             ui.vertical(|ui| {
                 ui.label(
                     egui::RichText::new(self.nav.title())
-                        .size(23.0)
-                        .strong()
+                        .font(Weight::Bold.font_id(23.0))
                         .color(text()),
                 );
                 ui.label(
@@ -1190,17 +1347,45 @@ impl SignerApp {
     }
 }
 
-fn main() -> eframe::Result {
-    let options = eframe::NativeOptions {
+// ---------------------------------------------------------------- startup
+
+struct Window {
+    app: fastframe_shell::Held<App>,
+}
+
+impl eframe::App for Window {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.app.ui(ui, frame);
+    }
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.app.logic(ctx, frame);
+    }
+}
+
+fn native_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1020.0, 680.0])
             .with_min_inner_size([860.0, 560.0])
             .with_title("Signer — DSC Token"),
         ..Default::default()
-    };
-    eframe::run_native(
-        "Signer",
-        options,
-        Box::new(|cc| Ok(Box::new(SignerApp::new(cc)))),
-    )
+    }
+}
+
+fn main() -> Result<(), eframe::Error> {
+    let waker = fastframe_shell::Waker::default();
+    let app = App::new(&waker);
+    fastframe_shell::Shell::new(app, &waker)
+        .idle(fastframe_tray::idle)
+        .run(|lease| {
+            eframe::run_native(
+                "Signer",
+                native_options(),
+                Box::new(move |cc| {
+                    let mut app = lease.take(&cc.egui_ctx);
+                    app.attach(&cc.egui_ctx);
+                    Ok(Box::new(Window { app }))
+                }),
+            )
+        })
 }

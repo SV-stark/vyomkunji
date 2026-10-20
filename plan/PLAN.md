@@ -125,27 +125,37 @@ Other message types: `listTokens`, `selectCert`, `pin`, `status`, `ping`.
 - Audit log of all signing events (local, tamper-evident).
 
 ## 7. Tech Stack
-- Extension: TypeScript, Chrome MV3, Vite.
-- Native app: Rust (core crypto/token), Tauri 2 (desktop + Android).
-  - PKCS#11 via `cryptoki` crate; PC/SC via `pcsc` crate.
-  - Crypto: `ring` / `rsa` crates.
-- Relay server (remote signing): Rust (axum) or Node, WebSocket, deployed.
-- Storage: SQLite (local history), OS keychain for session secrets.
+- Extension: JavaScript, Chrome MV3 + Firefox MV2, shared sources.
+- Native app: Rust.
+  - PKCS#11 via the `cryptoki` crate; PC/SC via the `pcsc` crate.
+  - Crypto: on-token signing only; the private key never leaves the token.
+- GUI: **egui/eframe 0.36.2** with **fastframe** (`text`, `fonts`, `theme`, `tray`, `shell`),
+  MIT, pinned to the `v0.14.0` git tag. fastframe gives native text rendering, Inter,
+  JSON palettes, a tray item and the keep-running shell the signing bridge needs.
+- Relay server (remote signing, Phase 5): Rust (axum) or Node, WebSocket, deployed.
+- Storage: JSON palette + log files under `%APPDATA%\Signer`.
 
 ## 8. Phases & Milestones
 - M0 (week 1-2): Plan + protocol + repo scaffold. ✅
-- M1 (week 3-4): Native host (native messaging) + token enumeration + mock sign.
-- M2 (week 5-6): Extension MV3 + incometax.gov.in content script + shim.
-- M3 (week 7-8): Real PKCS#11 signing + cert picker + PIN.
-- M4 (week 9-10): End-to-end on IT portal (ITR signing) + tests.
-- M5 (week 11-12): Remote signing (phone approve) + audit log.
+- M1 (week 3-4): Native host (native messaging) + token enumeration. ✅
+- M2 (week 5-6): Extension MV3/MV2 + incometax.gov.in content script + shim. ✅
+- M3 (week 7-8): Real PKCS#11 signing + cert picker + PIN. ✅ (PIN test pending)
+- M4 (week 9-10): End-to-end on IT portal (ITR signing) + tests. 🟡
+- M5 (week 11-12): Remote signing (phone approve) + audit log. 🟡
 - M6 (week 13+): Other free portals, then subscription portals.
 
-## 9. Deliverables in this repo (scaffold)
+**Shipped alongside M0–M3:** the tray + resident shell (the app keeps serving with the
+window closed and opens itself for a request), light/dark palettes and the JSON palette
+file, and the redesigned GUI.
+
+## 9. Deliverables in this repo
 - `plan/PLAN.md` — this file.
+- `features.md` — feature list and comparison with xorkeesign India G2C.
+- `CHANGELOG.md` — release history.
 - `shared/protocol.md` — message schema.
-- `extension/` — MV3 extension skeleton (manifest, background, content/incometax, popup).
-- `native-app/` — Rust native messaging host skeleton.
+- `README.md`, `docs/USAGE.md`, `docs/THEME.md` — how to run, sign and theme it.
+- `extension/` (Chrome MV3), `extension-firefox/` (Firefox MV2).
+- `native-app/` — Rust host, GUI, PKCS#11 layer and the localhost bridge.
 - `docs/portal-integration/incometax.md` — portal integration notes.
 
 ## 10. Open questions

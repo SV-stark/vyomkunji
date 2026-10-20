@@ -17,6 +17,19 @@ rand = "0.8"
 rsa = "0.9"
 cryptoki = "0.6"
 x509-parser = "0.16"
-eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
-egui = "0.31"
 
+# GUI stack
+eframe = { version = "0.36.2", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "wayland",
+    "x11",
+] }
+egui = "0.36.2"
+
+# fastframe: the shared foundation behind ZapFast/Spotifast (MIT, git tag).
+fastframe-text = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-fonts = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-theme = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-tray = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-shell = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }

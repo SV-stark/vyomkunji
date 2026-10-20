@@ -1,65 +1,119 @@
 # Signer — India G2C Digital Signing
 
-Single browser extension (Chrome + Firefox) + native app (Rust/egui) for DSC signing
-on Indian government portals. Priority: https://www.incometax.gov.in
+One browser extension (**Chrome + Firefox**) and one native app for DSC signing on
+Indian government portals. Priority: https://www.incometax.gov.in
+
+No Java. No token drivers. No emSigner, emBridge or CrisSigner.
 
 ## Architecture
+
 ```
-Browser (Chrome/Firefox)  --native messaging-->  signer-host.exe  --localhost TCP-->  gui.exe (approval + PIN)
-                                                             \--PKCS#11--> ProxKey token
+Chrome / Firefox
+      │  native messaging (Chrome Native Messaging protocol)
+      ▼
+signer-host.exe ──────────────► DSC token (PKCS#11: WDPKCS.dll)
+      │  localhost TCP bridge (127.0.0.1, JSON lines)
+      ▼
+gui.exe  ── tray + resident shell: keeps serving with the window closed,
+           re-opens by itself when a portal asks for a signature
 ```
-- `signer-host.exe` — native messaging host; enumerates tokens and forwards sign requests to the GUI.
-- `gui.exe` — egui app; shows the approval panel, PIN entry, and signs via PKCS#11.
-- The GUI must be running for sign requests to be approved (headless signing still works via `test_sign`).
 
-## Structure
-- `plan/PLAN.md`, `features.md`, `shared/protocol.md`
-- `docs/USAGE.md` — end-to-end guide to digitally sign on any portal
-- `extension/` — Chrome MV3 extension
-- `extension-firefox/` — Firefox MV2 extension
-- `native-app/` — Rust host + GUI (`Cargo.toml`, `src/`)
-- `docs/portal-integration/` — portal notes
-- `tools/` — sync/build helpers
+- **`signer-host.exe`** — the browser bridge. Enumerates tokens, forwards sign requests.
+- **`gui.exe`** — the app. Shows the approval panel, takes the PIN, signs on the token.
+- **Tray** — closing the window keeps the app alive; a new request brings it back.
 
-## How to digitally sign (any portal)
-See **[docs/USAGE.md](docs/USAGE.md)** for the full step-by-step flow. In short:
+## The stack
 
-1. Build + register the native host, load the extension.
-2. Start `gui.exe` → **Connect to token** → pick the default certificate in the popup.
-3. On the portal, click **"Sign with DSC"**.
-4. The GUI shows an approval panel → enter **PIN** → **Approve & Sign**.
-5. The signature is injected into the portal automatically.
+| Part | Choice |
+|---|---|
+| Extension | Chrome MV3 + Firefox MV2, plain JavaScript |
+| Native host | Rust, `cryptoki` (PKCS#11), Chrome Native Messaging |
+| App GUI | Rust, **egui/eframe 0.36.2** with **fastframe** (MIT, `v0.14.0`) |
+| fastframe crates | `text`, `fonts`, `theme`, `tray`, `shell` |
 
-Supported: Income Tax (priority), GST, MCA, EPFO, TDS/TRACES. Subscription portals
-(IREPS, ICEGATE, DGFT, …) are Phase 2.
+fastframe is the shared foundation behind ZapFast/Spotifast/Solco: native text
+rendering, Inter, JSON palettes, a tray item and the keep-running shell.
 
-## Quick start (dev)
-1. Build: `cd native-app && cargo build --release`
-2. Load Chrome extension: chrome://extensions → Developer mode → Load unpacked → `extension/`
-3. Register host (Chrome): `native-app/install-host.ps1 -Browser Chrome -ChromeExtensionId <id>`
-4. Run GUI: `cargo run --bin gui` (or `H:\target\release\gui.exe`)
-5. Test a portal: open the popup → select default certificate → visit a supported portal and click "Sign with DSC".
+## Project layout
 
-## Real token access (ProxKey / DSC)
-Auto-detected PKCS#11 module:
-`C:\Windows\System32\Watchdata\PROXKey CSP India V3.0\WDPKCS.dll`
-Override with env `SIGNER_PKCS11_MODULE`.
+| Path | What it is |
+|---|---|
+| `native-app/` | The Rust app: host, GUI, PKCS#11, bridge |
+| `extension/` | Chrome MV3 extension |
+| `extension-firefox/` | Firefox MV2 extension (shared sources, kept in step) |
+| `shared/protocol.md` | The extension ↔ app message protocol |
+| `docs/USAGE.md` | **How to sign on any portal** |
+| `docs/THEME.md` | Writing a palette file |
+| `docs/portal-integration/` | Per-portal notes |
+| `plan/PLAN.md`, `features.md` | Plan and comparison with xorkeesign |
+| `CHANGELOG.md` | What changed, and when |
+| `tools/` | Sync and icon helpers |
 
-Self-test (lists certs + signs a test payload; prompts for PIN on console):
+## Quick start
+
+1. **Build**
+   ```
+   cd native-app
+   cargo build --release
+   ```
+   Produces `gui.exe` (8.8 MB), `signer-host.exe` (0.8 MB), `test_sign.exe` (0.7 MB).
+
+2. **Load the extension**
+   - Chrome: `chrome://extensions` → Developer mode → Load unpacked → `extension/`
+   - Firefox: `about:debugging` → Load Temporary Add-on → `extension-firefox/manifest.json`
+
+3. **Register the native host**
+   ```
+   native-app\install-host.ps1 -Browser Both -ChromeExtensionId <id> -FirefoxExtensionUuid <uuid>
+   ```
+
+4. **Run the app**
+   ```
+   H:\target\release\gui.exe
+   ```
+   It connects to the token at start-up. Keep it running — or leave it in the tray.
+
+5. **Sign**
+   On the portal, click **"Sign with DSC"** → the app asks for the PIN → **Approve & Sign**.
+
+Full walkthrough: **[docs/USAGE.md](docs/USAGE.md)**.
+
+## Token support
+
+PKCS#11, so any token with a PKCS#11 module works. Auto-detected on this machine:
+
+```
+C:\Windows\System32\Watchdata\PROXKey CSP India V3.0\WDPKCS.dll
+```
+
+Override with the environment variable `SIGNER_PKCS11_MODULE`. Verified against a
+ProxKey (WD PROXKey WD05383117): both DSC owners are read, with issuer, serial and
+validity.
+
+Self-test (lists certificates and signs a test payload, prompting for the PIN):
 ```
 cargo run --bin test_sign
 ```
 
-## Firefox
-1. Load `extension-firefox/` in `about:debugging` → "Load Temporary Add-on".
-2. Find the extension's UUID at `about:debugging#/runtime/this-firefox`.
-3. Register host: `native-app/install-host.ps1 -Browser Firefox -FirefoxExtensionUuid <uuid>`
-4. Keep the GUI running.
+## Development
+
+```
+cd native-app
+cargo fmt
+cargo clippy --all-targets -- -D warnings
+cargo build --release
+```
+
+`tools\sync-extensions.ps1` copies the shared extension sources into the Firefox build.
 
 ## Status
-- Real PKCS#11 enumeration ✅ (verified: token + 2 DSC owners read)
-- Chrome + Firefox extensions scaffolded ✅
-- GUI approval bridge ✅
-- Portal sign interception 🟡 (needs live capture per portal)
-- `cargo fmt` + `cargo clippy --all-targets -- -D warnings` clean ✅
-- `SIGNER_MOCK=1` runs the development mock instead of a real token.
+
+- Token access (PKCS#11) — **done**, verified on ProxKey
+- Chrome + Firefox extensions — **done**
+- Tray + background-resident app — **done**
+- Light/dark palettes + JSON theming — **done**
+- On-token signing — implemented, awaiting a live PIN test
+- Portal interception — works generically; each portal still needs a live capture
+  (Income Tax first)
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history.
