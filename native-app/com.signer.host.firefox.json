@@ -1,0 +1,9 @@
+{
+  "name": "com.signer.host",
+  "description": "Signer native host (Firefox)",
+  "path": "REPLACE_WITH_ABSOLUTE_PATH_TO_signer-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "moz-extension://REPLACE_WITH_FIREFOX_EXTENSION_UUID/"
+  ]
+}

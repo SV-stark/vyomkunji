@@ -1,0 +1,6 @@
+/target
+native-app/target
+*.exe
+*.png
+!extension/icons/*.png
+!extension-firefox/icons/*.png

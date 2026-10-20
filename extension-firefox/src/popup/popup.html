@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Signer</title>
+  <style>
+    body { font-family: system-ui, sans-serif; width: 300px; padding: 12px; }
+    h3 { margin: 0 0 8px; }
+    .row { margin: 6px 0; font-size: 13px; }
+    select { width: 100%; padding: 6px; margin-top: 4px; }
+    button { width: 100%; padding: 8px; margin-top: 8px; }
+    #status { color: #555; }
+    .note { font-size: 11px; color: #777; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h3>Signer India G2C</h3>
+  <div class="row">Status: <span id="status">checking…</span></div>
+  <div class="row">Token: <span id="token">—</span></div>
+  <div class="row" id="certRow" hidden>
+    Default certificate:
+    <select id="certSelect"></select>
+  </div>
+  <button id="refresh">Refresh</button>
+  <div class="note">
+    Sign requests on supported portals are approved in the Signer GUI.
+    Keep the GUI running to sign.
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

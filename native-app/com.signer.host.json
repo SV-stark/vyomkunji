@@ -1,0 +1,9 @@
+{
+  "name": "com.signer.host",
+  "description": "Signer native host",
+  "path": "REPLACE_WITH_ABSOLUTE_PATH_TO_signer-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
+  ]
+}

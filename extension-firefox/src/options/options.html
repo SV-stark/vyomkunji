@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Signer Settings</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:32px auto;padding:0 16px}h2{margin-top:24px}code{background:#f2f2f2;padding:2px 5px;border-radius:3px}</style>
+</head>
+<body>
+  <h1>Signer India G2C — Settings</h1>
+  <p>The extension talks to the native host <code>signer-host.exe</code>, which signs via the GUI.</p>
+
+  <h2>Supported portals</h2>
+  <ul>
+    <li>Income Tax (incometax.gov.in) — priority</li>
+    <li>GST (gst.gov.in)</li>
+    <li>MCA (mca.gov.in)</li>
+    <li>EPFO (epfindia.gov.in)</li>
+    <li>TDS (tdscpc.gov.in) / TRACES (traces.gov.in)</li>
+  </ul>
+
+  <h2>Prerequisites</h2>
+  <ol>
+    <li>Install the Signer GUI (<code>gui.exe</code>) and keep it running.</li>
+    <li>Register the native messaging host (see <code>native-app/install-host.ps1</code>).</li>
+    <li>Attach your DSC token (e.g. ProxKey) — no drivers needed beyond the PKCS#11 module.</li>
+  </ol>
+
+  <h2>PKCS#11 module</h2>
+  <p>Auto-detected: <code>C:\Windows\System32\Watchdata\PROXKey CSP India V3.0\WDPKCS.dll</code></p>
+  <p>Override by setting environment variable <code>SIGNER_PKCS11_MODULE</code>.</p>
+</body>
+</html>

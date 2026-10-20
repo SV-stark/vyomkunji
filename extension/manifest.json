@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Signer India G2C",
+  "version": "0.1.0",
+  "description": "Unified digital signing on Indian government portals using your DSC token.",
+  "permissions": ["nativeMessaging", "storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://*.incometax.gov.in/*",
+    "https://incometax.gov.in/*",
+    "https://*.gst.gov.in/*",
+    "https://gst.gov.in/*",
+    "https://*.mca.gov.in/*",
+    "https://mca.gov.in/*",
+    "https://*.epfindia.gov.in/*",
+    "https://epfindia.gov.in/*",
+    "https://*.tdscpc.gov.in/*",
+    "https://tdscpc.gov.in/*",
+    "https://*.traces.gov.in/*",
+    "https://traces.gov.in/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.incometax.gov.in/*", "https://incometax.gov.in/*"],
+      "js": ["src/content/incometax.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.gst.gov.in/*", "https://gst.gov.in/*",
+        "https://*.mca.gov.in/*", "https://mca.gov.in/*",
+        "https://*.epfindia.gov.in/*", "https://epfindia.gov.in/*",
+        "https://*.tdscpc.gov.in/*", "https://tdscpc.gov.in/*",
+        "https://*.traces.gov.in/*", "https://traces.gov.in/*"
+      ],
+      "js": ["src/content/generic.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Signer"
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
