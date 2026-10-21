@@ -82,6 +82,11 @@ fn known_dll_names() -> &'static [&'static str] {
         "fort32.dll",
         "auCryptoki2-0.dll",
         "3gp11csp.dll",
+        // CryptoID / Longmai mToken (blue & purple variants)
+        "cryptoida_pkcs11.dll",
+        "cryptoida_pkcs11_f2.dll",
+        "cryptoida_pkcs11_f3.dll",
+        "cryptoid_pkcs11.dll",
         // Indian CA branded guesses (vendors frequently rebrand SafeNet/OpenSC)
         "capricornpkcs11.dll",
         "pantasignpkcs11.dll",
