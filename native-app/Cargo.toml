@@ -23,7 +23,7 @@ sha2 = { version = "0.11", features = ["oid"] }
 sha1 = "0.11"
 base64 = "0.23"
 uuid = { version = "1", features = ["v4"] }
-rand = "0.8"
+rand = "0.10"
 cryptoki = "0.12"
 zeroize = { version = "1", features = ["derive"] }
 x509-parser = "0.18"
