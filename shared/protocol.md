@@ -27,17 +27,48 @@ Response: `{ "id", "ok": true }`
 Request:
 ```json
 {
-  "id", "type": "sign",
+  "id": "uuid-v4",
+  "type": "sign",
   "portal": "incometax.gov.in",
-  "payload": { "data": "<base64>", "hashAlg": "SHA256", "signAlg": "RSA|ECDSA", "alreadyHashed": false },
+  "payload": {
+    "data": "<base64>",
+    "hashAlg": "SHA256",
+    "signAlg": "RSA",
+    "alreadyHashed": false,
+    "certCN": "optional filter substring"
+  },
   "certId": "optional",
-  "pin": "optional (prefer interactive prompt)"
+  "pin": "optional (prefer interactive prompt in GUI)"
 }
 ```
-Response success: `{ "id", "ok": true, "signature": "<base64>", "cert": "<base64 DER>", "signedAt": "ISO8601" }`
-Response error:   `{ "id", "ok": false, "error": { "code", "message" } }`
 
-Error codes: TOKEN_NOT_FOUND, PIN_REQUIRED, PIN_INVALID, CERT_EXPIRED, SIGN_FAILED, USER_CANCELLED.
+- **`alreadyHashed`**:
+  - `false` (default): `data` contains raw unhashed bytes. The token hashes with SHA-256 and signs using `Mechanism::Sha256RsaPkcs`.
+  - `true`: `data` contains a 32-byte pre-computed SHA-256 digest. Signer wraps it with the standard RFC 3447 ASN.1 `DigestInfo` prefix and signs using `Mechanism::RsaPkcs`.
+
+Response success:
+```json
+{
+  "id": "uuid-v4",
+  "ok": true,
+  "signature": "<base64 PKCS#1 v1.5 signature>",
+  "cert": "<base64 DER X.509 certificate>",
+  "certCN": "Common Name of certificate",
+  "certId": "<base64 PKCS#11 object ID>",
+  "signedAt": "2026-10-21T07:30:00Z"
+}
+```
+
+Response error:
+```json
+{
+  "id": "uuid-v4",
+  "ok": false,
+  "error": { "code": "ERROR_CODE", "message": "Human readable reason" }
+}
+```
+
+Error codes: `TOKEN_NOT_FOUND`, `NO_TOKEN`, `PIN_REQUIRED`, `PIN_INVALID`, `CERT_EXPIRED`, `SIGN_FAILED`, `USER_CANCELLED`, `BAD_BASE64`, `HOST_UNAVAILABLE`.
 
 ### status
 Request:  `{ "id", "type": "status" }`

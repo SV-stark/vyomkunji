@@ -64,6 +64,7 @@ struct Pending {
     hash_hex: String,
     received: String,
     cert_cn: Option<String>,
+    already_hashed: bool,
     data: Vec<u8>,
     resp: Sender<serde_json::Value>,
 }
@@ -220,7 +221,7 @@ impl App {
             pending: None,
             gui_rx: rx,
             pin: String::new(),
-            data_input: "SIGNER-TEST-PAYLOAD".to_string(),
+            data_input: "VYOMKUNJI-TEST-PAYLOAD".to_string(),
             status: "Starting…".to_string(),
             status_level: Level::Info,
             log: Vec::new(),
@@ -242,23 +243,23 @@ impl App {
         let wake = waker.clone();
         let tray = Tray::spawn(
             Config {
-                id: "signer",
-                title: "Signer".to_string(),
+                id: "vyomkunji",
+                title: "VyomKunji".to_string(),
                 icon: icons::app_icon_rgba,
                 template_icon: None,
                 themed_icon: false,
                 menu: vec![
-                    MenuItem::action("show", "Show Signer"),
+                    MenuItem::action("show", "Show VyomKunji"),
                     MenuItem::action("requests", "Pending requests"),
                     MenuItem::Separator,
-                    MenuItem::action("quit", "Quit Signer"),
+                    MenuItem::action("quit", "Quit VyomKunji"),
                 ],
             },
             move || wake.wake(),
         );
         app.tray = tray;
 
-        app.push_log(Level::Info, "Signer started".to_string());
+        app.push_log(Level::Info, "VyomKunji started".to_string());
         app.connect();
         app
     }
@@ -365,7 +366,7 @@ impl App {
         }
         let cn = self.current_cert().map(|c| c.cn.clone());
         let data = self.data_input.as_bytes().to_vec();
-        match tm.sign(&self.pin, &data, cn.as_deref()) {
+        match tm.sign(&self.pin, &data, cn.as_deref(), false) {
             Ok(r) => {
                 self.signature = r["signature"].as_str().unwrap_or("").to_string();
                 self.signature_cn = r["certCN"].as_str().unwrap_or("").to_string();
@@ -387,15 +388,22 @@ impl App {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown portal")
             .to_string();
-        let data_b64 = req
-            .get("payload")
+        let payload = req.get("payload");
+        let data_b64 = payload
             .and_then(|p| p.get("data"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let bytes = B64.decode(data_b64).unwrap_or_default();
-        let hash_hex = hex(&Sha256::digest(&bytes));
-        let cert_cn = req
-            .get("payload")
+        let already_hashed = payload
+            .and_then(|p| p.get("alreadyHashed"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let hash_hex = if already_hashed && bytes.len() == 32 {
+            hex(&bytes)
+        } else {
+            hex(&Sha256::digest(&bytes))
+        };
+        let cert_cn = payload
             .and_then(|p| p.get("certCN"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
@@ -421,13 +429,14 @@ impl App {
             hash_hex,
             received: now_clock(),
             cert_cn,
+            already_hashed,
             data: bytes,
             resp,
         });
         self.nav = Nav::Requests;
         self.wants_show = true;
         if let Some(tray) = self.tray.as_mut() {
-            tray.set_tooltip(format!("Signer\nWaiting for approval: {}", portal));
+            tray.set_tooltip(format!("VyomKunji\nWaiting for approval: {}", portal));
         }
         self.waker.wake();
     }
@@ -453,15 +462,22 @@ impl App {
             }
         };
         let data = pending.data.clone();
-        match tm.sign(&self.pin, &data, pending.cert_cn.as_deref()) {
+        match tm.sign(
+            &self.pin,
+            &data,
+            pending.cert_cn.as_deref(),
+            pending.already_hashed,
+        ) {
             Ok(r) => {
                 let sig = r["signature"].as_str().unwrap_or("").to_string();
+                let cert = r["cert"].as_str().unwrap_or("").to_string();
                 let cn = r["certCN"].as_str().unwrap_or("").to_string();
                 self.signature = sig.clone();
                 self.signature_cn = cn.clone();
                 let _ = pending.resp.send(serde_json::json!({
                     "ok": true,
                     "signature": sig,
+                    "cert": cert,
                     "certId": r["certId"],
                     "certCN": cn,
                     "signedAt": now_iso(),
@@ -480,7 +496,7 @@ impl App {
             }
         }
         if let Some(tray) = self.tray.as_mut() {
-            tray.set_tooltip("Signer");
+            tray.set_tooltip("VyomKunji");
         }
     }
 
@@ -493,7 +509,7 @@ impl App {
             self.set_status(Level::Warn, format!("Request from {} cancelled", p.portal));
         }
         if let Some(tray) = self.tray.as_mut() {
-            tray.set_tooltip("Signer");
+            tray.set_tooltip("VyomKunji");
         }
     }
 
@@ -568,7 +584,7 @@ impl Resident for App {
     }
 
     fn shutdown(&mut self) {
-        self.push_log(Level::Info, "Signer stopped".to_string());
+        self.push_log(Level::Info, "VyomKunji stopped".to_string());
     }
 }
 
@@ -587,8 +603,10 @@ impl eframe::App for App {
         self.pump_requests();
         self.drain_tray();
 
-        // TEST MODE: auto-connect and auto-approve when SIGNER_GUI_TEST_PIN is set.
-        if let Ok(pin) = std::env::var("SIGNER_GUI_TEST_PIN") {
+        // TEST MODE: auto-connect and auto-approve when VYOMKUNJI_GUI_TEST_PIN (or SIGNER_GUI_TEST_PIN) is set.
+        if let Ok(pin) = std::env::var("VYOMKUNJI_GUI_TEST_PIN")
+            .or_else(|_| std::env::var("SIGNER_GUI_TEST_PIN"))
+        {
             if self.manager.is_none() {
                 self.connect();
             }
@@ -665,7 +683,7 @@ impl App {
             ui.vertical(|ui| {
                 ui.add_space(1.0);
                 ui.label(
-                    egui::RichText::new("Signer")
+                    egui::RichText::new("VyomKunji")
                         .font(Weight::SemiBold.font_id(17.0))
                         .color(text()),
                 );
@@ -819,7 +837,7 @@ impl App {
                 );
             }
             ui.label(
-                egui::RichText::new("Signer 0.1.0")
+                egui::RichText::new("VyomKunji 0.1.0")
                     .font(Weight::Regular.font_id(10.0))
                     .color(text_faint()),
             );
@@ -1367,7 +1385,7 @@ fn native_options() -> eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1020.0, 680.0])
             .with_min_inner_size([860.0, 560.0])
-            .with_title("Signer — DSC Token"),
+            .with_title("VyomKunji — DSC Token"),
         ..Default::default()
     }
 }
@@ -1379,7 +1397,7 @@ fn main() -> Result<(), eframe::Error> {
         .idle(fastframe_tray::idle)
         .run(|lease| {
             eframe::run_native(
-                "Signer",
+                "VyomKunji",
                 native_options(),
                 Box::new(move |cc| {
                     let mut app = lease.take(&cc.egui_ctx);

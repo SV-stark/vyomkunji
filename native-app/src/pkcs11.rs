@@ -13,7 +13,9 @@ pub struct TokenManager {
 }
 
 fn default_module_paths() -> Vec<String> {
-    if let Ok(p) = std::env::var("SIGNER_PKCS11_MODULE") {
+    if let Ok(p) =
+        std::env::var("VYOMKUNJI_PKCS11_MODULE").or_else(|_| std::env::var("SIGNER_PKCS11_MODULE"))
+    {
         return vec![p];
     }
     let mut v = vec![
@@ -182,11 +184,15 @@ impl TokenManager {
     }
 
     /// Sign `data` with the token's signing key. Optionally filter cert CN.
+    /// If `already_hashed` is true, expects a 32-byte SHA-256 digest (or 51-byte DigestInfo structure)
+    /// and signs with `Mechanism::RsaPkcs`.
+    /// If `already_hashed` is false, hashes with SHA-256 and signs with `Mechanism::Sha256RsaPkcs`.
     pub fn sign(
         &self,
         pin: &str,
         data: &[u8],
         cert_cn_filter: Option<&str>,
+        already_hashed: bool,
     ) -> Result<Value, String> {
         let slots = self
             .pkcs11
@@ -194,7 +200,7 @@ impl TokenManager {
             .map_err(|e| e.to_string())?;
         let mut last_err = "no token found".to_string();
         for slot in slots {
-            if let Ok(r) = self.sign_in_slot(slot, pin, data, cert_cn_filter) {
+            if let Ok(r) = self.sign_in_slot(slot, pin, data, cert_cn_filter, already_hashed) {
                 return Ok(r);
             }
             last_err = "signing failed in all tokens".to_string();
@@ -208,6 +214,7 @@ impl TokenManager {
         pin: &str,
         data: &[u8],
         cert_cn_filter: Option<&str>,
+        already_hashed: bool,
     ) -> Result<Value, String> {
         let session = self
             .pkcs11
@@ -228,6 +235,7 @@ impl TokenManager {
 
         let mut chosen_id: Option<Vec<u8>> = None;
         let mut chosen_cn = String::new();
+        let mut chosen_der = Vec::new();
         for c in &certs {
             let attrs = session
                 .get_attributes(*c, &[AttributeType::Value, AttributeType::Id])
@@ -252,6 +260,7 @@ impl TokenManager {
             }
             chosen_id = Some(id);
             chosen_cn = info.cn;
+            chosen_der = der;
             break;
         }
 
@@ -272,17 +281,40 @@ impl TokenManager {
             .next()
             .ok_or_else(|| "no private signing key found".to_string())?;
 
-        let sig = session
-            .sign(&Mechanism::Sha256RsaPkcs, key, data)
-            .map_err(|e| format!("sign failed: {}", e))?;
+        let (sig, mechanism_name) = if already_hashed {
+            // SHA-256 DigestInfo prefix (RFC 3447 / PKCS #1 v2.2):
+            // SEQUENCE { SEQUENCE { AlgorithmIdentifier sha-256, NULL }, OCTET STRING hash }
+            const SHA256_DIGEST_INFO_PREFIX: [u8; 19] = [
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x01, 0x05, 0x00, 0x04, 0x20,
+            ];
+            let payload_to_sign = if data.len() == 32 {
+                let mut v = Vec::with_capacity(51);
+                v.extend_from_slice(&SHA256_DIGEST_INFO_PREFIX);
+                v.extend_from_slice(data);
+                v
+            } else {
+                data.to_vec()
+            };
+            let s = session
+                .sign(&Mechanism::RsaPkcs, key, &payload_to_sign)
+                .map_err(|e| format!("sign failed: {}", e))?;
+            (s, "RSA_PKCS")
+        } else {
+            let s = session
+                .sign(&Mechanism::Sha256RsaPkcs, key, data)
+                .map_err(|e| format!("sign failed: {}", e))?;
+            (s, "SHA256_RSA_PKCS")
+        };
 
         let _ = session.logout();
 
         Ok(json!({
             "signature": B64.encode(&sig),
+            "cert": B64.encode(&chosen_der),
             "certId": B64.encode(chosen_id.unwrap_or_default()),
             "certCN": chosen_cn,
-            "mechanism": "SHA256_RSA_PKCS",
+            "mechanism": mechanism_name,
         }))
     }
 }

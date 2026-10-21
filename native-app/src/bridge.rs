@@ -7,18 +7,42 @@ use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
 pub fn port_file_path() -> Option<std::path::PathBuf> {
-    std::env::var("APPDATA")
-        .ok()
-        .map(|a| std::path::PathBuf::from(a).join("Signer").join("gui.port"))
+    let appdata = std::env::var("APPDATA").ok()?;
+    let p_vyom = std::path::PathBuf::from(&appdata)
+        .join("VyomKunji")
+        .join("gui.port");
+    if p_vyom.exists() {
+        return Some(p_vyom);
+    }
+    let p_signer = std::path::PathBuf::from(&appdata)
+        .join("Signer")
+        .join("gui.port");
+    if p_signer.exists() {
+        return Some(p_signer);
+    }
+    Some(p_vyom)
 }
 
 pub fn write_port(port: u16) -> std::io::Result<()> {
-    let path = port_file_path()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set"))?;
+    let appdata = std::env::var("APPDATA")
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set"))?;
+    let path = std::path::PathBuf::from(&appdata)
+        .join("VyomKunji")
+        .join("gui.port");
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, format!("{}", port))
+    let s = format!("{}", port);
+    std::fs::write(&path, &s)?;
+    // also write to legacy path so older scripts continue to find it
+    let legacy = std::path::PathBuf::from(&appdata)
+        .join("Signer")
+        .join("gui.port");
+    if let Some(dir) = legacy.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(legacy, &s);
+    Ok(())
 }
 
 pub fn read_port() -> Option<u16> {

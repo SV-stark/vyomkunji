@@ -4,3 +4,5 @@ native-app/target
 *.png
 !extension/icons/*.png
 !extension-firefox/icons/*.png
+features.md
+

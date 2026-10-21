@@ -138,13 +138,19 @@ pub fn palettes() -> (Palette, Palette) {
     }
 }
 
-/// Read a user palette from `%APPDATA%\Signer\theme.json`, if it is there.
+/// Read a user palette from `%APPDATA%\VyomKunji\theme.json` (or `%APPDATA%\Signer\theme.json`), if present.
 pub fn load_user_palette() -> Option<Palette> {
-    let path = std::env::var("APPDATA").ok().map(|a| {
-        std::path::PathBuf::from(a)
+    let appdata = std::env::var("APPDATA").ok()?;
+    let p_vyom = std::path::PathBuf::from(&appdata)
+        .join("VyomKunji")
+        .join("theme.json");
+    let path = if p_vyom.exists() {
+        p_vyom
+    } else {
+        std::path::PathBuf::from(&appdata)
             .join("Signer")
             .join("theme.json")
-    })?;
+    };
     let text = std::fs::read_to_string(path).ok()?;
     fastframe_theme::parse_palette::<Palette>(&text).ok()
 }

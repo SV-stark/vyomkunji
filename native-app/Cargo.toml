@@ -1,11 +1,17 @@
 [package]
-name = "signer-host"
+name = "vyomkunji"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-only"
+description = "VyomKunji — India G2C Digital Signing"
 
 [[bin]]
-name = "signer-host"
+name = "vyomkunji-host"
 path = "src/main.rs"
+
+[[bin]]
+name = "vyomkunji"
+path = "src/bin/gui.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

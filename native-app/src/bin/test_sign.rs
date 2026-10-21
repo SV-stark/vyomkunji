@@ -30,9 +30,10 @@ fn main() {
     std::io::stdin().read_line(&mut pin).unwrap();
     let pin = pin.trim();
 
+    let cn_filter = std::env::var("SIGNER_TEST_CN").ok();
     let data = b"SIGNER-SELFTEST-PAYLOAD";
     println!("signing {} bytes with SHA256_RSA_PKCS...", data.len());
-    match tm.sign(pin, data, Some("SUYASH SINGH VERMA")) {
+    match tm.sign(pin, data, cn_filter.as_deref(), false) {
         Ok(r) => {
             let sig = r["signature"].as_str().unwrap();
             println!(
@@ -41,6 +42,9 @@ fn main() {
                 sig.len()
             );
             println!("certId: {}", r["certId"]);
+            if let Some(cert) = r.get("cert").and_then(|v| v.as_str()) {
+                println!("cert DER: base64 {} chars", cert.len());
+            }
         }
         Err(e) => println!("SIGN FAILED: {}", e),
     }

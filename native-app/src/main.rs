@@ -70,7 +70,9 @@ fn write_msg(s: &str) {
 }
 
 fn main() {
-    let mock = std::env::var("SIGNER_MOCK").is_ok();
+    let mock = std::env::var("VYOMKUNJI_MOCK")
+        .or_else(|_| std::env::var("SIGNER_MOCK"))
+        .is_ok();
 
     while let Some(msg) = read_msg() {
         let req: Req = match serde_json::from_str(&msg) {
@@ -190,11 +192,19 @@ fn handle(req: &Req, mock: bool) -> Resp {
                 .get("portal")
                 .and_then(|v| v.as_str())
                 .unwrap_or("portal");
+            let already_hashed = payload
+                .get("alreadyHashed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             // Preferred: route to the GUI for user approval + PIN entry.
             let gui_req = serde_json::json!({
                 "portal": portal,
-                "payload": { "data": data_b64, "certCN": cn }
+                "payload": {
+                    "data": data_b64,
+                    "certCN": cn,
+                    "alreadyHashed": already_hashed
+                }
             });
             if let Some(resp) = bridge::request_gui(&gui_req, Duration::from_secs(120)) {
                 if resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -210,7 +220,10 @@ fn handle(req: &Req, mock: bool) -> Resp {
                             .get("signature")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
-                        cert: None,
+                        cert: resp
+                            .get("cert")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
                         signed_at: Some(
                             resp.get("signedAt")
                                 .and_then(|v| v.as_str())
@@ -241,7 +254,7 @@ fn handle(req: &Req, mock: bool) -> Resp {
                     "GUI not running and no PIN provided".to_string(),
                 );
             }
-            match tm.sign(pin, &bytes, cn) {
+            match tm.sign(pin, &bytes, cn, already_hashed) {
                 Ok(r) => Resp {
                     id: req.id.clone(),
                     ok: true,
@@ -254,7 +267,10 @@ fn handle(req: &Req, mock: bool) -> Resp {
                         .get("signature")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string()),
-                    cert: None,
+                    cert: r
+                        .get("cert")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     signed_at: Some(now_iso()),
                     error: None,
                 },

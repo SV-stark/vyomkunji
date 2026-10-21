@@ -67,3 +67,29 @@ pub fn days_until(date: &str) -> Option<i64> {
     let today = unix_secs().div_euclid(86400);
     Some(days_from_civil(y, m, d) - today)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_civil_roundtrip() {
+        let days = days_from_civil(2026, 10, 21);
+        let (y, m, d) = civil_from_days(days);
+        assert_eq!((y, m, d), (2026, 10, 21));
+    }
+
+    #[test]
+    fn test_now_iso_format() {
+        let iso = now_iso();
+        assert_eq!(iso.len(), 20);
+        assert!(iso.ends_with('Z'));
+        assert_eq!(&iso[10..11], "T");
+    }
+
+    #[test]
+    fn test_days_until() {
+        assert!(days_until("invalid-date").is_none());
+        assert!(days_until("2026-10-21").is_some());
+    }
+}

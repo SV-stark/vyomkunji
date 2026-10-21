@@ -15,6 +15,55 @@
     });
   }
 
+  // Inject main-world network interceptor into the page DOM
+  function injectMainWorldInterceptor() {
+    try {
+      const script = document.createElement("script");
+      script.src = chrome.runtime.getURL("src/content/interceptor-main.js");
+      script.onload = function () {
+        this.remove();
+      };
+      (document.head || document.documentElement).appendChild(script);
+    } catch (e) {
+      console.warn("[VyomKunji] could not inject main-world interceptor", e);
+    }
+  }
+
+  // Bridge messages from the page's main-world interceptor to the background native host
+  window.addEventListener("message", async (ev) => {
+    if (!ev.data || ev.data.source !== "signer-page-request") return;
+    const { id, body } = ev.data;
+
+    let certCN = null;
+    try {
+      const stored = await Promise.resolve(chrome.storage.local.get("defaultCertCN"));
+      certCN = (stored && stored.defaultCertCN) || null;
+    } catch (e) {}
+
+    const req = {
+      id: id || uuid(),
+      type: "sign",
+      portal: PORTAL,
+      payload: {
+        data: body ? btoa(unescape(encodeURIComponent(body))) : "",
+        hashAlg: "SHA256",
+        signAlg: "RSA",
+        alreadyHashed: false,
+        certCN
+      }
+    };
+
+    const resp = await sendNative(req);
+    window.postMessage({
+      source: "signer-content-response",
+      id: id,
+      ok: !!(resp && resp.ok),
+      signature: (resp && resp.signature) || "",
+      cert: (resp && resp.cert) || "",
+      error: resp && resp.error
+    }, "*");
+  });
+
   // Detect DSC sign triggers
   function findSignButtons() {
     const candidates = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit]"));
@@ -29,8 +78,7 @@
     const dataEl = document.querySelector("[data-sign-data], #signData, input[name='signData']");
     const data = dataEl ? (dataEl.value || dataEl.getAttribute("data-sign-data")) : null;
     if (!data) {
-      // fallback: ask user to confirm generic sign
-      console.log("[Signer] no explicit sign data found; requesting empty sign");
+      console.log("[VyomKunji] no explicit sign data found; requesting sign");
     }
     const req = {
       id: uuid(),
@@ -44,7 +92,7 @@
     } catch (e) {}
     const resp = await sendNative(req);
     if (!resp || !resp.ok) {
-      alert("Signer: signing failed - " + (resp?.error?.message || "unknown"));
+      alert("VyomKunji: signing failed - " + (resp?.error?.message || "unknown"));
       return;
     }
     // Inject signature into portal's expected field if present
@@ -53,9 +101,9 @@
       if (sigField.tagName === "INPUT" || sigField.tagName === "TEXTAREA") sigField.value = resp.signature;
       else sigField.setAttribute("data-signature", resp.signature);
     }
-    console.log("[Signer] signed OK", resp.signedAt);
-    // dispatch event portal may listen for
+    console.log("[VyomKunji] signed OK", resp.signedAt);
     window.dispatchEvent(new CustomEvent("signer:signed", { detail: resp }));
+    window.dispatchEvent(new CustomEvent("vyomkunji:signed", { detail: resp }));
   }
 
   function attach() {
@@ -63,7 +111,6 @@
       if (btn.dataset.signerAttached) return;
       btn.dataset.signerAttached = "1";
       btn.addEventListener("click", (ev) => {
-        // intercept: prevent portal's default signer invocation
         ev.preventDefault();
         ev.stopImmediatePropagation();
         handleSignClick(ev);
@@ -71,30 +118,12 @@
     });
   }
 
-  // emSigner HTTP shim: intercept fetch/XHR to localhost signer endpoints
-  const origFetch = window.fetch;
-  window.fetch = async function (input, init) {
-    const url = typeof input === "string" ? input : input?.url;
-    if (url && /127\.0\.0\.1|localhost/.test(url) && /emsigner|dsigner|sign/i.test(url)) {
-      console.log("[Signer] intercepted fetch to", url);
-      // forward to native app as a "sign" with raw body
-      const body = init?.body ? String(init.body) : "";
-      const req = { id: uuid(), type: "sign", portal: PORTAL, payload: { data: btoa(body), hashAlg: "SHA256", signAlg: "RSA", alreadyHashed: false } };
-      const resp = await sendNative(req);
-      if (resp && resp.ok) {
-        return new Response(JSON.stringify({ status: "success", signature: resp.signature, cert: resp.cert }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-    return origFetch.apply(this, arguments);
-  };
+  injectMainWorldInterceptor();
 
   // Re-scan on DOM changes
   const obs = new MutationObserver(() => attach());
   obs.observe(document.documentElement, { childList: true, subtree: true });
   attach();
 
-  console.log("[Signer] incometax content script loaded");
+  console.log("[VyomKunji] incometax content script loaded");
 })();

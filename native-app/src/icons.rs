@@ -1,7 +1,7 @@
 // Tray / window icon, drawn at runtime so no image decoder is needed.
 use egui::Color32;
 
-/// RGBA bytes of the Signer mark: a rounded square in the brand colour with
+/// RGBA bytes of the VyomKunji mark: a rounded square in the brand colour with
 /// a white keyhole in it (a keyhole reads as "key" at 16 px).
 pub fn app_icon_rgba(size: usize) -> Vec<u8> {
     let accent = Color32::from_rgb(0x4C, 0x8D, 0xFF);

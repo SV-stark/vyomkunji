@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Signer India G2C",
+  "name": "VyomKunji — India G2C Digital Signing",
   "version": "0.1.0",
   "description": "Unified digital signing on Indian government portals using your DSC token.",
   "permissions": ["nativeMessaging", "storage", "activeTab", "scripting"],
@@ -42,8 +42,21 @@
   ],
   "action": {
     "default_popup": "src/popup/popup.html",
-    "default_title": "Signer"
+    "default_title": "VyomKunji"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/content/interceptor-main.js"],
+      "matches": [
+        "https://*.incometax.gov.in/*", "https://incometax.gov.in/*",
+        "https://*.gst.gov.in/*", "https://gst.gov.in/*",
+        "https://*.mca.gov.in/*", "https://mca.gov.in/*",
+        "https://*.epfindia.gov.in/*", "https://epfindia.gov.in/*",
+        "https://*.tdscpc.gov.in/*", "https://tdscpc.gov.in/*",
+        "https://*.traces.gov.in/*", "https://traces.gov.in/*"
+      ]
+    }
+  ],
   "options_ui": {
     "page": "src/options/options.html",
     "open_in_tab": true

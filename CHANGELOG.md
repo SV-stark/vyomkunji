@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **Signer — India G2C Digital Signing** are recorded here.
+All notable changes to **VyomKunji — India G2C Digital Signing** are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -9,6 +9,8 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **AGPL-3.0 License**: Added GNU Affero General Public License version 3.0 (`LICENSE`).
+- **Project Rebranding**: Renamed project to **VyomKunji** across native binary (`vyomkunji`), host (`vyomkunji-host`), Chrome MV3 and Firefox MV2 extensions (`VyomKunji India G2C`), storage path (`%APPDATA%\VyomKunji`), and documentation. Backwards compatibility preserved for legacy `signer` binaries, hosts, and paths.
 - `fastframe-shell` resident shell: the app keeps running with its window closed and
   re-opens by itself when a portal asks for a signature.
 - `fastframe-tray` notification-area item (Show Signer / Pending requests / Quit).
@@ -33,6 +35,11 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the system font covering it.
 - Certificate metadata now carries issuer, serial and validity, so expiry can be
   colour-coded.
+- **Firefox Native Messaging manifest**: Changed `allowed_origins` with UUID to `allowed_extensions` matching `signer-g2c@signer.local`.
+- **Main-world network hook**: Added `interceptor-main.js` injected directly into page DOM to intercept `fetch` and `XMLHttpRequest` to localhost emSigner/dsigner endpoints across isolated worlds.
+- **Certificate DER delivery**: Signature responses now return the base64-encoded X.509 certificate DER (`cert`) required by Indian portals to verify signatures.
+- **Pre-hashed payload support**: Added `alreadyHashed` handling in PKCS#11; properly wraps 32-byte SHA-256 digests in ASN.1 DigestInfo and uses `Mechanism::RsaPkcs`.
+- **Unit test suite**: Added unit tests for civil date conversions, ISO timestamps, and date diffing.
 
 ---
 

@@ -19,11 +19,63 @@
     return null;
   }
 
+  const PORTAL = detectPortal(location.host);
+  if (!PORTAL) return;
+
   function uuid() { return crypto.randomUUID(); }
 
   function sendNative(payload) {
     return new Promise((resolve) => chrome.runtime.sendMessage({ type: "nativeRequest", payload }, resolve));
   }
+
+  // Inject main-world network interceptor into the page DOM
+  function injectMainWorldInterceptor() {
+    try {
+      const script = document.createElement("script");
+      script.src = chrome.runtime.getURL("src/content/interceptor-main.js");
+      script.onload = function () {
+        this.remove();
+      };
+      (document.head || document.documentElement).appendChild(script);
+    } catch (e) {
+      console.warn("[VyomKunji] could not inject main-world interceptor", e);
+    }
+  }
+
+  // Bridge messages from the page's main-world interceptor to the background native host
+  window.addEventListener("message", async (ev) => {
+    if (!ev.data || ev.data.source !== "signer-page-request") return;
+    const { id, body } = ev.data;
+
+    let certCN = null;
+    try {
+      const stored = await Promise.resolve(chrome.storage.local.get("defaultCertCN"));
+      certCN = (stored && stored.defaultCertCN) || null;
+    } catch (e) {}
+
+    const req = {
+      id: id || uuid(),
+      type: "sign",
+      portal: PORTAL,
+      payload: {
+        data: body ? btoa(unescape(encodeURIComponent(body))) : "",
+        hashAlg: "SHA256",
+        signAlg: "RSA",
+        alreadyHashed: false,
+        certCN
+      }
+    };
+
+    const resp = await sendNative(req);
+    window.postMessage({
+      source: "signer-content-response",
+      id: id,
+      ok: !!(resp && resp.ok),
+      signature: (resp && resp.signature) || "",
+      cert: (resp && resp.cert) || "",
+      error: resp && resp.error
+    }, "*");
+  });
 
   function findSignButtons(triggers) {
     const els = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit], [role=button]"));
@@ -49,7 +101,7 @@
     };
     const resp = await sendNative(req);
     if (!resp || !resp.ok) {
-      alert("Signer: signing failed - " + (resp && resp.error ? resp.error.message : "unknown"));
+      alert("VyomKunji: signing failed - " + (resp && resp.error ? resp.error.message : "unknown"));
       return;
     }
     const sigField = document.querySelector("#signature, input[name='signature'], [data-signature-target]");
@@ -58,30 +110,9 @@
       else sigField.setAttribute("data-signature", resp.signature);
     }
     window.dispatchEvent(new CustomEvent("signer:signed", { detail: resp }));
-    console.log("[Signer] signed via " + PORTAL, resp.signedAt);
+    window.dispatchEvent(new CustomEvent("vyomkunji:signed", { detail: resp }));
+    console.log("[VyomKunji] signed via " + PORTAL, resp.signedAt);
   }
-
-  const PORTAL = detectPortal(location.host);
-  if (!PORTAL) return;
-
-  // emSigner / DSC-signer localhost shim
-  const origFetch = window.fetch;
-  window.fetch = async function (input, init) {
-    const url = typeof input === "string" ? input : input && input.url;
-    if (url && /127\.0\.0\.1|localhost/.test(url) && /emsigner|dsigner|sign/i.test(url)) {
-      const body = init && init.body ? String(init.body) : "";
-      let certCN = null;
-      try { const s = await Promise.resolve(chrome.storage.local.get("defaultCertCN")); certCN = (s && s.defaultCertCN) || null; } catch (e) {}
-      const req = { id: uuid(), type: "sign", portal: PORTAL, payload: { data: btoa(unescape(encodeURIComponent(body))), hashAlg: "SHA256", signAlg: "RSA", certCN } };
-      const resp = await sendNative(req);
-      if (resp && resp.ok) {
-        return new Response(JSON.stringify({ status: "success", signature: resp.signature, cert: resp.cert || "" }), {
-          status: 200, headers: { "Content-Type": "application/json" }
-        });
-      }
-    }
-    return origFetch.apply(this, arguments);
-  };
 
   function attach() {
     findSignButtons(PORTALS[PORTAL].triggers).forEach((btn) => {
@@ -95,7 +126,9 @@
     });
   }
 
+  injectMainWorldInterceptor();
+
   new MutationObserver(attach).observe(document.documentElement, { childList: true, subtree: true });
   attach();
-  console.log("[Signer] generic content script active on " + PORTAL);
+  console.log("[VyomKunji] generic content script active on " + PORTAL);
 })();

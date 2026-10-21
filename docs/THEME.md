@@ -1,16 +1,16 @@
-# Theming (Signer palette file)
+# Theming (VyomKunji palette file)
 
-The Signer app paints itself with a **palette** — a set of named colours. The palette
+The VyomKunji app paints itself with a **palette** — a set of named colours. The palette
 implements `fastframe_theme::Palette`, so it can be replaced by a JSON file without
 rebuilding the app.
 
 ## Where the file goes
 
 ```
-%APPDATA%\Signer\theme.json
+%APPDATA%\VyomKunji\theme.json
 ```
 
-(`C:\Users\<you>\AppData\Roaming\Signer\theme.json`)
+(`C:\Users\<you>\AppData\Roaming\VyomKunji\theme.json`, with fallback to `Signer\theme.json`)
 
 The file is read at start-up. If it is missing, the built-in dark and light palettes are
 used. A file that cannot be parsed is ignored, and the built-in palette is kept.

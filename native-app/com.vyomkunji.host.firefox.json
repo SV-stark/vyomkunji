@@ -1,0 +1,9 @@
+{
+  "name": "com.vyomkunji.host",
+  "description": "VyomKunji native host (Firefox)",
+  "path": "REPLACE_WITH_ABSOLUTE_PATH_TO_signer-host.exe",
+  "type": "stdio",
+  "allowed_extensions": [
+    "REPLACE_WITH_FIREFOX_EXTENSION_ID"
+  ]
+}

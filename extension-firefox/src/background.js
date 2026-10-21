@@ -1,5 +1,6 @@
 // background.js — service worker
-const NATIVE_HOST = "com.signer.host";
+const NATIVE_HOST = "com.vyomkunji.host";
+const LEGACY_HOST = "com.signer.host";
 
 let port = null;
 function connectNative() {
@@ -7,16 +8,22 @@ function connectNative() {
   try {
     port = chrome.runtime.connectNative(NATIVE_HOST);
     port.onDisconnect.addListener(() => {
-      console.warn("native host disconnected", chrome.runtime.lastError);
+      console.warn("VyomKunji native host disconnected", chrome.runtime.lastError);
       port = null;
     });
     port.onMessage.addListener((msg) => {
-      // fan out to content scripts / popup via runtime messages
       chrome.runtime.sendMessage({ type: "nativeResponse", payload: msg }).catch(() => {});
     });
   } catch (e) {
-    console.error("native connect failed", e);
-    port = null;
+    try {
+      port = chrome.runtime.connectNative(LEGACY_HOST);
+      port.onDisconnect.addListener(() => { port = null; });
+      port.onMessage.addListener((msg) => {
+        chrome.runtime.sendMessage({ type: "nativeResponse", payload: msg }).catch(() => {});
+      });
+    } catch (_) {
+      port = null;
+    }
   }
   return port;
 }
@@ -25,7 +32,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "nativeRequest") {
     const p = connectNative();
     if (!p) {
-      sendResponse({ ok: false, error: { code: "HOST_UNAVAILABLE", message: "Native host not connected" } });
+      sendResponse({ ok: false, error: { code: "HOST_UNAVAILABLE", message: "VyomKunji native host not connected" } });
       return true;
     }
     // correlate by id
@@ -48,4 +55,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // keep-alive-ish: ensure connection on startup
 connectNative();
-console.log("Signer background ready");
+console.log("VyomKunji background ready");

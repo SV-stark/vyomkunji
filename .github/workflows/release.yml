@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Package Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Native Binaries (Release)
+        working-directory: native-app
+        run: cargo build --release
+
+      - name: Package Native Application
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $dist = "dist\vyomkunji-windows-x64"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          
+          # Find binaries
+          $binDir = if (Test-Path "native-app\target\release\vyomkunji.exe") {
+            "native-app\target\release"
+          } elseif (Test-Path "target\release\vyomkunji.exe") {
+            "target\release"
+          } else {
+            throw "Could not locate compiled binaries"
+          }
+          
+          Copy-Item "$binDir\vyomkunji.exe" -Destination $dist
+          Copy-Item "$binDir\vyomkunji-host.exe" -Destination $dist
+          Copy-Item "native-app\install-host.ps1" -Destination $dist
+          Copy-Item "native-app\com.vyomkunji.host.json" -Destination $dist
+          Copy-Item "native-app\com.vyomkunji.host.firefox.json" -Destination $dist
+          Copy-Item "native-app\com.signer.host.json" -Destination $dist
+          Copy-Item "native-app\com.signer.host.firefox.json" -Destination $dist
+          Copy-Item "LICENSE" -Destination $dist
+          Copy-Item "README.md" -Destination $dist
+          
+          Compress-Archive -Path "$dist\*" -DestinationPath "vyomkunji-$tag-windows-x64.zip" -Force
+          Write-Host "Created vyomkunji-$tag-windows-x64.zip"
+
+      - name: Package Chrome Extension
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          Compress-Archive -Path "extension\*" -DestinationPath "vyomkunji-chrome-$tag.zip" -Force
+          Write-Host "Created vyomkunji-chrome-$tag.zip"
+
+      - name: Package Firefox Extension
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          Compress-Archive -Path "extension-firefox\*" -DestinationPath "vyomkunji-firefox-$tag.zip" -Force
+          Write-Host "Created vyomkunji-firefox-$tag.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            vyomkunji-*-windows-x64.zip
+            vyomkunji-chrome-*.zip
+            vyomkunji-firefox-*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false

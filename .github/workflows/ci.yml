@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-format:
+    name: Format & Lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-app -> target
+
+      - name: Check Formatting
+        working-directory: native-app
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        working-directory: native-app
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Unit Tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-app -> target
+
+      - name: Run Tests
+        working-directory: native-app
+        run: cargo test --all-targets
+
+  build:
+    name: Build Native Binaries
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-app -> target
+
+      - name: Build Release
+        working-directory: native-app
+        run: cargo build --release
