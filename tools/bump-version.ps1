@@ -18,29 +18,36 @@ function Write-Text([string]$Path, [string]$Text) {
   [System.IO.File]::WriteAllText($Path, $Text, $utf8)
 }
 
+# Read as UTF-8 explicitly: Windows PowerShell 5.1 would otherwise decode the
+# files with the active ANSI code page and corrupt the em dashes in the
+# extension name and the README.
+function Read-Text([string]$Path) {
+  return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+}
+
 # --- Cargo.toml (first `version =` line, i.e. the [package] version) ---------
 $cargoPath = Join-Path $root "native-app\Cargo.toml"
-$cargo = Get-Content $cargoPath -Raw
+$cargo = Read-Text $cargoPath
 $cargo = [regex]::Replace($cargo, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1)
 Write-Text $cargoPath $cargo
 
 # --- extension manifests ----------------------------------------------------
 foreach ($rel in @("extension\manifest.json", "extension-firefox\manifest.json")) {
   $path = Join-Path $root $rel
-  $json = Get-Content $path -Raw
+  $json = Read-Text $path
   $json = [regex]::Replace($json, '"version":\s*"[^"]+"', "`"version`": `"$Version`"", 1)
   Write-Text $path $json
 }
 
 # --- Inno Setup -------------------------------------------------------------
 $issPath = Join-Path $root "installer\vyomkunji.iss"
-$iss = Get-Content $issPath -Raw
+$iss = Read-Text $issPath
 $iss = [regex]::Replace($iss, '#define MyAppVersion "[^"]+"', "#define MyAppVersion `"$Version`"", 1)
 Write-Text $issPath $iss
 
 # --- README asset names -----------------------------------------------------
 $readmePath = Join-Path $root "README.md"
-$readme = Get-Content $readmePath -Raw
+$readme = Read-Text $readmePath
 $readme = [regex]::Replace($readme, 'vyomkunji-v\d+\.\d+\.\d+', "vyomkunji-v$Version")
 $readme = [regex]::Replace($readme, 'vyomkunji-chrome-v\d+\.\d+\.\d+', "vyomkunji-chrome-v$Version")
 $readme = [regex]::Replace($readme, 'vyomkunji-firefox-v\d+\.\d+\.\d+', "vyomkunji-firefox-v$Version")

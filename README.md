@@ -97,7 +97,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 ### Option 1: Quick Install (Pre-Built Release)
 
 1. **Download the latest release**:
-   Download `vyomkunji-v0.3.0-windows-x64.zip` from [GitHub Releases](https://github.com/SV-stark/vyomkunji/releases/latest).
+   Download `vyomkunji-v0.4.0-windows-x64.zip` from [GitHub Releases](https://github.com/SV-stark/vyomkunji/releases/latest).
 2. **Extract the archive** to any folder on your computer (e.g. `C:\Program Files\VyomKunji` or your User folder).
    > A one-click installer (`vyomkunji-<version>-setup.exe`) is published as well. It installs per-user or machine-wide, registers the native host for Chrome/Edge and Firefox, closes a running app before upgrading, and can add an optional "start at sign-in" entry.
 3. **Register the Native Host**:
@@ -108,7 +108,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 4. **Install the Browser Extension**:
    * **Google Chrome / Microsoft Edge**:
      1. Open `chrome://extensions` and enable **Developer mode** (top right).
-     2. Extract `vyomkunji-chrome-v0.3.0.zip` and click **Load unpacked**.
+     2. Extract `vyomkunji-chrome-v0.4.0.zip` and click **Load unpacked**.
    * **Mozilla Firefox**:
      1. Open `about:debugging#/runtime/this-firefox`.
      2. Click **Load Temporary Add-on** and select `manifest.json` from the extracted Firefox extension zip.
