@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "VyomKunji — India G2C Digital Signing",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Unified digital signing on Indian government portals using your DSC token.",
   "permissions": [
     "nativeMessaging",

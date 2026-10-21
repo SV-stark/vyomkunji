@@ -1,5 +1,6 @@
 // Signer GUI — egui/eframe 0.36 on fastframe: tray, resident shell, native
 // text rendering, JSON palettes. Run: cargo run --bin gui
+#![windows_subsystem = "windows"]
 #[path = "../bridge.rs"]
 mod bridge;
 #[path = "../icons.rs"]
@@ -965,7 +966,7 @@ impl App {
                 );
             }
             ui.label(
-                egui::RichText::new("VyomKunji 0.2.2")
+                egui::RichText::new("VyomKunji 0.2.3")
                     .font(Weight::Regular.font_id(10.0))
                     .color(text_faint()),
             );

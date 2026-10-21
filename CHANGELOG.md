@@ -44,6 +44,11 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.3] — 2026-10-21
+
+### Fixed
+- **Console window on launch**: added `#![windows_subsystem = "windows"]` to the GUI binary so `vyomkunji.exe` no longer opens a persistent CMD window (closing it no longer kills the app).
+
 ## [0.2.2] — 2026-10-21
 
 ### Added
