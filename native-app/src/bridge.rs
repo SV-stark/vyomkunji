@@ -7,7 +7,7 @@
 // %APPDATA% (which Windows protects with a per-user ACL), so another
 // local user cannot read them. A same-user process still cannot issue
 // a request without first reading the token file.
-use rand::RngCore;
+use rand::Rng;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -51,7 +51,7 @@ fn token_file_path() -> Option<PathBuf> {
 
 fn random_token() -> String {
     let mut bytes = [0u8; TOKEN_BYTES];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
