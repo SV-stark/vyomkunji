@@ -19,8 +19,10 @@ use fastframe_tray::{Config, Event, MenuItem, Tray};
 use pkcs11::TokenManager;
 use sha2::{Digest, Sha256};
 use std::sync::mpsc::{Receiver, Sender};
+use std::time::{Duration, Instant};
 use theme::{accent, accent2, border, card, card_hi, err, ok, text, text_dim, text_faint, warn};
 use timeutil::{days_until, now_clock, now_iso};
+use zeroize::Zeroizing;
 
 #[derive(Clone)]
 struct CertRow {
@@ -104,7 +106,10 @@ struct App {
     selected: usize,
     pending: Option<Pending>,
     gui_rx: Receiver<GuiRequest>,
-    pin: String,
+    pin: Zeroizing<String>,
+    pin_set_at: Option<Instant>,
+    pin_timeout: Duration,
+    last_token_check: Instant,
     data_input: String,
     status: String,
     status_level: Level,
@@ -204,6 +209,29 @@ fn kv(ui: &mut egui::Ui, k: &str, v: &str, mono: bool) {
     });
 }
 
+/// Build certificate rows from a `list_tokens` JSON payload.
+fn cert_rows_from_tokens(tokens: &serde_json::Value) -> Vec<CertRow> {
+    let mut rows = Vec::new();
+    if let Some(arr) = tokens.as_array() {
+        for t in arr {
+            let tl = t["label"].as_str().unwrap_or("").to_string();
+            let ts = t["serial"].as_str().unwrap_or("").to_string();
+            for c in t["certs"].as_array().cloned().unwrap_or_default() {
+                rows.push(CertRow {
+                    token_label: tl.clone(),
+                    token_serial: ts.clone(),
+                    cn: c["cn"].as_str().unwrap_or("").to_string(),
+                    issuer: c["issuer"].as_str().unwrap_or("").to_string(),
+                    not_after: c["notAfter"].as_str().unwrap_or("").to_string(),
+                    serial: c["serial"].as_str().unwrap_or("").to_string(),
+                    id: c["id"].as_str().unwrap_or("").to_string(),
+                });
+            }
+        }
+    }
+    rows
+}
+
 // ---------------------------------------------------------------- app
 
 impl App {
@@ -220,7 +248,16 @@ impl App {
             selected: 0,
             pending: None,
             gui_rx: rx,
-            pin: String::new(),
+            pin: Zeroizing::new(String::new()),
+            pin_set_at: None,
+            pin_timeout: Duration::from_secs(
+                std::env::var("VYOMKUNJI_PIN_TIMEOUT_MIN")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(5)
+                    * 60,
+            ),
+            last_token_check: Instant::now(),
             data_input: "VYOMKUNJI-TEST-PAYLOAD".to_string(),
             status: "Starting…".to_string(),
             status_level: Level::Info,
@@ -314,22 +351,7 @@ impl App {
         match TokenManager::auto() {
             Ok((module, tm)) => match tm.list_tokens() {
                 Ok(tokens) => {
-                    let mut rows = Vec::new();
-                    for t in tokens.as_array().unwrap() {
-                        let tl = t["label"].as_str().unwrap_or("").to_string();
-                        let ts = t["serial"].as_str().unwrap_or("").to_string();
-                        for c in t["certs"].as_array().unwrap() {
-                            rows.push(CertRow {
-                                token_label: tl.clone(),
-                                token_serial: ts.clone(),
-                                cn: c["cn"].as_str().unwrap_or("").to_string(),
-                                issuer: c["issuer"].as_str().unwrap_or("").to_string(),
-                                not_after: c["notAfter"].as_str().unwrap_or("").to_string(),
-                                serial: c["serial"].as_str().unwrap_or("").to_string(),
-                                id: c["id"].as_str().unwrap_or("").to_string(),
-                            });
-                        }
-                    }
+                    let rows = cert_rows_from_tokens(&tokens);
                     let n = rows.len();
                     self.certs = rows;
                     self.selected = 0;
@@ -338,12 +360,83 @@ impl App {
                 }
                 Err(e) => {
                     self.manager = None;
+                    self.certs.clear();
                     self.set_status(Level::Err, format!("Token error: {}", e));
                 }
             },
             Err(e) => {
                 self.manager = None;
+                self.certs.clear();
                 self.set_status(Level::Err, format!("No PKCS#11 module: {}", e));
+            }
+        }
+    }
+
+    /// Hot-plug aware refresh: re-check token presence periodically without
+    /// spamming the activity log. Called from pump_requests().
+    fn refresh_token(&mut self) {
+        // Throttle.
+        if self.last_token_check.elapsed() < Duration::from_secs(3) {
+            return;
+        }
+        self.last_token_check = Instant::now();
+
+        let manager = self.manager.take();
+        if let Some((module, tm)) = manager {
+            match tm.list_tokens() {
+                Ok(tokens) => {
+                    let new_rows = cert_rows_from_tokens(&tokens);
+                    let old_sig: String = self
+                        .certs
+                        .iter()
+                        .map(|c| format!("{}:{}", c.cn, c.token_serial))
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    let new_sig: String = new_rows
+                        .iter()
+                        .map(|c| format!("{}:{}", c.cn, c.token_serial))
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    if old_sig != new_sig {
+                        let n = new_rows.len();
+                        self.certs = new_rows;
+                        if self.selected >= self.certs.len() {
+                            self.selected = 0;
+                        }
+                        if n == 0 {
+                            self.set_status(Level::Warn, "Token removed".to_string());
+                        } else {
+                            self.set_status(
+                                Level::Ok,
+                                format!("Token updated · {} certificate(s)", n),
+                            );
+                        }
+                    }
+                    self.manager = Some((module, tm));
+                }
+                Err(_) => {
+                    self.manager = None;
+                    self.certs.clear();
+                    self.selected = 0;
+                    self.set_status(Level::Warn, "Token disconnected".to_string());
+                }
+            }
+        } else {
+            // Try to (re)discover a module.
+            if let Ok((module, tm)) = TokenManager::auto() {
+                if let Ok(tokens) = tm.list_tokens() {
+                    let rows = cert_rows_from_tokens(&tokens);
+                    let n = rows.len();
+                    self.certs = rows;
+                    self.selected = 0;
+                    self.manager = Some((module, tm));
+                    if n > 0 {
+                        self.set_status(
+                            Level::Ok,
+                            format!("Token connected · {} certificate(s)", n),
+                        );
+                    }
+                }
             }
         }
     }
@@ -374,6 +467,11 @@ impl App {
                     Level::Ok,
                     format!("Signed {} bytes with {}", data.len(), self.signature_cn),
                 );
+                self.pin_set_at = if self.pin.is_empty() {
+                    None
+                } else {
+                    Some(Instant::now())
+                };
             }
             Err(e) => {
                 self.signature.clear();
@@ -486,6 +584,11 @@ impl App {
                     Level::Ok,
                     format!("Approved & signed for {}", pending.portal),
                 );
+                self.pin_set_at = if self.pin.is_empty() {
+                    None
+                } else {
+                    Some(Instant::now())
+                };
             }
             Err(e) => {
                 let _ = pending.resp.send(serde_json::json!({
@@ -518,6 +621,7 @@ impl App {
         while let Ok((req, resp)) = self.gui_rx.try_recv() {
             self.accept_request(req, resp);
         }
+        self.refresh_token();
     }
 
     /// Handle tray clicks.
@@ -603,6 +707,19 @@ impl eframe::App for App {
         self.pump_requests();
         self.drain_tray();
 
+        // Idle auto-lock: clear the in-memory PIN after the configured timeout.
+        if !self.pin.is_empty() {
+            let expired = self
+                .pin_set_at
+                .map(|t| t.elapsed() >= self.pin_timeout)
+                .unwrap_or(false);
+            if expired {
+                self.pin = Zeroizing::new(String::new());
+                self.pin_set_at = None;
+                self.set_status(Level::Info, "PIN cleared after idle timeout".to_string());
+            }
+        }
+
         // TEST MODE: auto-connect and auto-approve when VYOMKUNJI_GUI_TEST_PIN (or SIGNER_GUI_TEST_PIN) is set.
         if let Ok(pin) = std::env::var("VYOMKUNJI_GUI_TEST_PIN")
             .or_else(|_| std::env::var("SIGNER_GUI_TEST_PIN"))
@@ -610,7 +727,7 @@ impl eframe::App for App {
             if self.manager.is_none() {
                 self.connect();
             }
-            self.pin = pin;
+            self.pin = Zeroizing::new(pin);
             if self.pending.is_some() {
                 self.approve_pending();
             }
@@ -837,7 +954,7 @@ impl App {
                 );
             }
             ui.label(
-                egui::RichText::new("VyomKunji 0.1.0")
+                egui::RichText::new("VyomKunji 0.2.0")
                     .font(Weight::Regular.font_id(10.0))
                     .color(text_faint()),
             );
@@ -957,12 +1074,19 @@ impl App {
                             .color(text_faint())
                             .size(12.0),
                     );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.pin)
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut *self.pin)
                             .password(true)
                             .hint_text("Enter PIN to approve")
                             .desired_width(f32::INFINITY),
                     );
+                    if r.changed() {
+                        self.pin_set_at = if self.pin.is_empty() {
+                            None
+                        } else {
+                            Some(Instant::now())
+                        };
+                    }
 
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
@@ -1249,12 +1373,19 @@ impl App {
                     .color(text_faint())
                     .size(12.0),
             );
-            ui.add(
-                egui::TextEdit::singleline(&mut self.pin)
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut *self.pin)
                     .password(true)
                     .hint_text("PIN")
                     .desired_width(f32::INFINITY),
             );
+            if r.changed() {
+                self.pin_set_at = if self.pin.is_empty() {
+                    None
+                } else {
+                    Some(Instant::now())
+                };
+            }
 
             ui.add_space(14.0);
             ui.horizontal(|ui| {

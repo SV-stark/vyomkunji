@@ -124,7 +124,7 @@ fn handle(req: &Req, mock: bool) -> Resp {
         return Resp {
             id: req.id.clone(),
             ok: true,
-            version: Some("0.1.0".to_string()),
+            version: Some("0.2.0".to_string()),
             module: None,
             token_connected: None,
             cert_selected: None,

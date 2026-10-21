@@ -1,6 +1,6 @@
 [package]
 name = "vyomkunji"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "VyomKunji — India G2C Digital Signing"
@@ -22,6 +22,7 @@ uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 rsa = "0.9"
 cryptoki = "0.6"
+zeroize = { version = "1", features = ["derive"] }
 x509-parser = "0.16"
 
 # GUI stack

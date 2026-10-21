@@ -43,6 +43,20 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.0] — 2026-10-21
+
+### Added
+- **Fixed Chrome extension ID**: shipped a `key` in `extension/manifest.json`, making the extension ID deterministic (`cnmiodibehhadaglhadkalhgjjeiblfp`) so the native host whitelist works out of the box.
+- **One-click local installer**: `install.ps1` plus an Inno Setup script (`installer/vyomkunji.iss`) bundling binaries, manifests, and both extensions, registering the native host post-install.
+- **PIN zeroize + idle auto-lock**: PIN held in a `Zeroizing<String>` and cleared after a configurable idle timeout (`VYOMKUNJI_PIN_TIMEOUT_MIN`, default 5 min).
+- **USB hot-plug awareness**: GUI re-enumerates the token every 3 s and surfaces connect/disconnect/update status.
+- **Expanded PKCS#11 auto-detection**: scans System32/SysWOW64 and vendor install directories, filters by `C_GetFunctionList`, tries every candidate, prefers a module exposing an inserted token; env override accepts a directory.
+
+### Changed
+- Version bumped to `0.2.0` across Cargo, manifests, installer, and docs.
+
+---
+
 ## [0.1.0] — 2026-10-21
 
 ### Added

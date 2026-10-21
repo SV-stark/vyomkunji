@@ -12,19 +12,269 @@ pub struct TokenManager {
     pkcs11: Pkcs11,
 }
 
+/// Optional explicit override. Accepts either a single DLL path or a directory
+/// (in which case the directory is scanned recursively for PKCS#11 modules).
+fn env_module_override() -> Option<String> {
+    std::env::var("VYOMKUNJI_PKCS11_MODULE")
+        .or_else(|_| std::env::var("SIGNER_PKCS11_MODULE"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn push_if_exists(out: &mut Vec<String>, p: String) {
+    let path = std::path::Path::new(&p);
+    if path.is_file() && !out.iter().any(|x| x.eq_ignore_ascii_case(&p)) {
+        out.push(p);
+    }
+}
+
+/// Curated set of well-known PKCS#11 module file names used by Indian (and
+/// common global) DSC token drivers. Matching is case-insensitive.
+fn known_dll_names() -> &'static [&'static str] {
+    &[
+        // Watchdata / ProxKey
+        "WDPKCS.dll",
+        "WDPKCS64.dll",
+        // SafeNet / Gemalto eToken family (used by many Indian CAs)
+        "etpkcs11.dll",
+        "eToken.dll",
+        // ePass 2003 / HYP 2003
+        "eps2003csp11.dll",
+        "eps2003csp11_64.dll",
+        "hyp2003csp11.dll",
+        // AET / Rainbow / StarSign middleware
+        "aetpkss1.dll",
+        "aetpksse.dll",
+        "aetpkssw.dll",
+        // Siemens Card OS
+        "siecap11.dll",
+        "etpkcs11.dll",
+        // Datakey
+        "dkck201.dll",
+        "dkck232.dll",
+        // Utimaco
+        "pkcs201n.dll",
+        // OpenSC
+        "opensc-pkcs11.dll",
+        // nShield
+        "cknfast.dll",
+        // Generic / TeleSec style
+        "pkcs11.dll",
+        "cryptoki.dll",
+        "cryptoki22.dll",
+        // Schlumberger / SafeNet
+        "slbck.dll",
+        "acpkcs.dll",
+        "acpkcs211.dll",
+        // SecuTech
+        "utp11.dll",
+        // InnaIT
+        "innaitpkcs11.dll",
+        // OpenSC / others
+        "p11card.dll",
+        "micardopkcs11.dll",
+        "nxpkcs11.dll",
+        "smartp11.dll",
+        "spypk11.dll",
+        "fort32.dll",
+        "auCryptoki2-0.dll",
+        "3gp11csp.dll",
+        // Indian CA branded guesses (vendors frequently rebrand SafeNet/OpenSC)
+        "capricornpkcs11.dll",
+        "pantasignpkcs11.dll",
+        "safescryptpkcs11.dll",
+        "emudhrapkcs11.dll",
+        "ncodepkcs11.dll",
+        "vsignpkcs11.dll",
+        "idsignpkcs11.dll",
+        "xtratrustpkcs11.dll",
+        "prodigisignpkcs11.dll",
+        "care4signpkcs11.dll",
+        "signxpkcs11.dll",
+    ]
+}
+
+fn known_vendor_directories() -> Vec<String> {
+    let mut dirs = Vec::new();
+    let push = |dirs: &mut Vec<String>, p: &str| dirs.push(p.to_string());
+
+    // Watchdata / ProxKey
+    push(
+        &mut dirs,
+        r"C:\Windows\System32\Watchdata\PROXKey CSP India V3.0",
+    );
+    push(
+        &mut dirs,
+        r"C:\Windows\SysWOW64\Watchdata\PROXKey CSP India V3.0",
+    );
+    push(&mut dirs, r"C:\Program Files\Watchdata");
+    push(&mut dirs, r"C:\Program Files (x86)\Watchdata");
+
+    // eMudhra
+    push(&mut dirs, r"C:\Program Files\eMudhra");
+    push(&mut dirs, r"C:\Program Files (x86)\eMudhra");
+    push(&mut dirs, r"C:\Program Files\eMudhra USB token");
+    push(&mut dirs, r"C:\Program Files (x86)\eMudhra USB token");
+
+    // (n)Code Solutions
+    push(&mut dirs, r"C:\Program Files\nCode Solutions");
+    push(&mut dirs, r"C:\Program Files (x86)\nCode Solutions");
+    push(&mut dirs, r"C:\Program Files\GNFC");
+    push(&mut dirs, r"C:\Program Files (x86)\GNFC");
+
+    // SafeNet / Gemalto (used by Safescrypt, Capricorn, Pantasign, Vsign, ...)
+    push(&mut dirs, r"C:\Program Files\SafeNet");
+    push(&mut dirs, r"C:\Program Files (x86)\SafeNet");
+    push(&mut dirs, r"C:\Program Files\Gemalto");
+    push(&mut dirs, r"C:\Program Files (x86)\Gemalto");
+    push(&mut dirs, r"C:\Program Files\Safenet");
+    push(&mut dirs, r"C:\Program Files (x86)\Safenet");
+
+    // InnaIT
+    push(&mut dirs, r"C:\Program Files\InnaIT");
+    push(&mut dirs, r"C:\Program Files (x86)\InnaIT");
+
+    // OpenSC
+    push(&mut dirs, r"C:\Program Files\OpenSC Project");
+    push(&mut dirs, r"C:\Program Files (x86)\OpenSC Project");
+
+    // Aladdin (legacy)
+    push(&mut dirs, r"C:\Program Files\Aladdin");
+    push(&mut dirs, r"C:\Program Files (x86)\Aladdin");
+
+    dirs
+}
+
+/// Recursively scan `root` (up to `depth` levels) collecting candidate PKCS#11
+/// modules. Only files whose name matches a known module name or contains
+/// "pkcs"/"cryptoki"/"token" are collected, to keep the list small.
+fn scan_dir_for_pkcs11(root: &std::path::Path, depth: usize, out: &mut Vec<String>) {
+    if depth == 0 || !root.is_dir() {
+        return;
+    }
+    let entries = match std::fs::read_dir(root) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                let lower = name.to_lowercase();
+                if !lower.ends_with(".dll") {
+                    continue;
+                }
+                let known = known_dll_names()
+                    .iter()
+                    .any(|k| k.eq_ignore_ascii_case(name));
+                let pattern =
+                    lower.contains("pkcs") || lower.contains("cryptoki") || lower.contains("token");
+                if known || pattern {
+                    let ps = path.to_string_lossy().to_string();
+                    if !out.iter().any(|x| x.eq_ignore_ascii_case(&ps)) {
+                        out.push(ps);
+                    }
+                }
+            }
+        } else if path.is_dir() && depth > 1 {
+            scan_dir_for_pkcs11(&path, depth - 1, out);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn has_pkcs11_entrypoint(path: &str) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryW(lpfilename: *const u16) -> *mut std::ffi::c_void;
+        fn GetProcAddress(
+            hmodule: *mut std::ffi::c_void,
+            lpprocname: *const i8,
+        ) -> *mut std::ffi::c_void;
+        fn FreeLibrary(hlibmodule: *mut std::ffi::c_void) -> i32;
+    }
+    let wide: Vec<u16> = OsStr::new(path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let h = LoadLibraryW(wide.as_ptr());
+        if h.is_null() {
+            return false;
+        }
+        let proc = GetProcAddress(h, c"C_GetFunctionList".as_ptr());
+        let _ = FreeLibrary(h);
+        !proc.is_null()
+    }
+}
+
 fn default_module_paths() -> Vec<String> {
-    if let Ok(p) =
-        std::env::var("VYOMKUNJI_PKCS11_MODULE").or_else(|_| std::env::var("SIGNER_PKCS11_MODULE"))
-    {
+    // Explicit override wins.
+    if let Some(p) = env_module_override() {
+        let path = std::path::Path::new(&p);
+        if path.is_dir() {
+            let mut out = Vec::new();
+            scan_dir_for_pkcs11(path, 5, &mut out);
+            if !out.is_empty() {
+                return out;
+            }
+        }
         return vec![p];
     }
-    let mut v = vec![
+
+    let mut v = Vec::new();
+
+    // Vendor-specific directories (deeper scan).
+    for d in known_vendor_directories() {
+        let dir = std::path::Path::new(&d);
+        if dir.is_dir() {
+            scan_dir_for_pkcs11(dir, 4, &mut v);
+        }
+    }
+
+    // System directories: shallow scan catches modules dropped directly in
+    // System32/SysWOW64 (common for many token drivers).
+    for sys in [r"C:\Windows\System32", r"C:\Windows\SysWOW64"] {
+        let root = std::path::Path::new(sys);
+        if root.is_dir() {
+            scan_dir_for_pkcs11(root, 2, &mut v);
+        }
+    }
+
+    // Program Files roots are intentionally NOT scanned generically: a broad
+    // scan there is slow and pulls in unrelated DLLs. Vendor-specific
+    // directories above already cover the common install locations. Users with
+    // a non-standard install path can set VYOMKUNJI_PKCS11_MODULE.
+
+    // Legacy explicit paths (kept for compatibility).
+    push_if_exists(
+        &mut v,
         r"C:\Windows\System32\Watchdata\PROXKey CSP India V3.0\WDPKCS.dll".to_string(),
+    );
+    push_if_exists(
+        &mut v,
         r"C:\Windows\SysWOW64\Watchdata\PROXKey CSP India V3.0\WDPKCS.dll".to_string(),
-    ];
-    // generic candidates
-    v.push(r"C:\Windows\System32\WDPKCS.dll".to_string());
-    v
+    );
+    push_if_exists(&mut v, r"C:\Windows\System32\WDPKCS.dll".to_string());
+
+    // Case-insensitive dedup.
+    let mut deduped = Vec::new();
+    for p in v {
+        if !deduped.iter().any(|x: &String| x.eq_ignore_ascii_case(&p)) {
+            deduped.push(p);
+        }
+    }
+
+    // Keep only genuine PKCS#11 modules (must export C_GetFunctionList).
+    // This filters out random DLLs picked up by the directory scan.
+    #[cfg(windows)]
+    {
+        deduped.retain(|p| has_pkcs11_entrypoint(p));
+    }
+    deduped
 }
 
 /// Human-readable metadata extracted from a DER certificate.
@@ -39,24 +289,74 @@ pub struct CertInfo {
 
 impl TokenManager {
     /// Auto-detect and load a PKCS#11 module, returning (module_path, manager).
+    ///
+    /// Unlike the previous implementation, this tries *every* candidate module
+    /// instead of giving up on the first one that fails to initialise, and it
+    /// prefers a module that actually exposes an inserted token. This makes
+    /// detection robust across the many Indian CA token drivers (ProxKey,
+    /// eMudhra, (n)Code, SafeScrypt, Capricorn, Pantasign, Vsign, ...).
     pub fn auto() -> Result<(String, Self), String> {
-        for p in default_module_paths() {
+        let candidates = default_module_paths();
+        if candidates.is_empty() {
+            return Err("No PKCS#11 module found (set VYOMKUNJI_PKCS11_MODULE)".to_string());
+        }
+
+        let mut last_err = String::new();
+        let mut fallback: Option<(String, Self)> = None;
+
+        for p in candidates {
             if !Path::new(&p).exists() {
                 continue;
             }
             match Self::new(&p) {
-                Ok(m) => return Ok((p, m)),
-                Err(e) => return Err(format!("{}: {}", p, e)),
+                Ok(m) => {
+                    // Prefer a module that actually exposes an inserted token.
+                    let has_token = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        m.pkcs11
+                            .get_slots_with_token()
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false)
+                    }))
+                    .unwrap_or(false);
+                    if has_token {
+                        return Ok((p, m));
+                    }
+                    if fallback.is_none() {
+                        fallback = Some((p, m));
+                    }
+                }
+                Err(e) => {
+                    if last_err.is_empty() {
+                        last_err = format!("{}: {}", p, e);
+                    }
+                }
             }
         }
-        Err("No PKCS#11 module found (set SIGNER_PKCS11_MODULE)".to_string())
+
+        if let Some(fb) = fallback {
+            return Ok(fb);
+        }
+        Err(if last_err.is_empty() {
+            "No PKCS#11 module found (set VYOMKUNJI_PKCS11_MODULE)".to_string()
+        } else {
+            last_err
+        })
     }
 
     pub fn new(module_path: &str) -> Result<Self, String> {
-        let pk = Pkcs11::new(module_path).map_err(|e| e.to_string())?;
-        pk.initialize(CInitializeArgs::OsThreads)
-            .map_err(|e| e.to_string())?;
-        Ok(Self { pkcs11: pk })
+        // Some candidate DLLs are not real PKCS#11 modules and loading them can
+        // panic inside cryptoki-sys (GetProcAddress failures). Guard against that.
+        let load = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let pk = Pkcs11::new(module_path).map_err(|e| e.to_string())?;
+            pk.initialize(CInitializeArgs::OsThreads)
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>(pk)
+        }));
+        match load {
+            Ok(Ok(pk)) => Ok(Self { pkcs11: pk }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(format!("panic while loading {}", module_path)),
+        }
     }
 
     /// Human-readable metadata extracted from a DER certificate.

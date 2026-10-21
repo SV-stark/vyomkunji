@@ -3,7 +3,7 @@ param(
   [string]$ExePath = "",
   [ValidateSet("Chrome", "Firefox", "Both")]
   [string]$Browser = "Both",
-  [string]$ChromeExtensionId = "REPLACE_ME",
+  [string]$ChromeExtensionId = "cnmiodibehhadaglhadkalhgjjeiblfp",
   [string]$FirefoxExtensionId = "vyomkunji-g2c@vyomkunji.local"
 )
 $ErrorActionPreference = "Stop"

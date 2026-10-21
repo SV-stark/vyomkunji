@@ -5,4 +5,9 @@ native-app/target
 !extension/icons/*.png
 !extension-firefox/icons/*.png
 features.md
+# Private keys / secrets
+*.pem
+*.key
+*.p12
+*.pfx
 
