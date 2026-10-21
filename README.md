@@ -95,7 +95,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 ### Option 1: Quick Install (Pre-Built Release)
 
 1. **Download the latest release**:
-   Download `vyomkunji-v0.2.0-windows-x64.zip` from [GitHub Releases](https://github.com/SV-stark/vyomkunji/releases/latest).
+   Download `vyomkunji-v0.3.0-windows-x64.zip` from [GitHub Releases](https://github.com/SV-stark/vyomkunji/releases/latest).
 2. **Extract the archive** to any folder on your computer (e.g. `C:\Program Files\VyomKunji` or your User folder).
 3. **Register the Native Host**:
    Open PowerShell in the extracted folder and run:
@@ -105,7 +105,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 4. **Install the Browser Extension**:
    * **Google Chrome / Microsoft Edge**:
      1. Open `chrome://extensions` and enable **Developer mode** (top right).
-     2. Extract `vyomkunji-chrome-v0.2.0.zip` and click **Load unpacked**.
+     2. Extract `vyomkunji-chrome-v0.3.0.zip` and click **Load unpacked**.
    * **Mozilla Firefox**:
      1. Open `about:debugging#/runtime/this-firefox`.
      2. Click **Load Temporary Add-on** and select `manifest.json` from the extracted Firefox extension zip.
@@ -164,7 +164,9 @@ VyomKunji was designed from day one around **zero-trust and non-repudiation**:
 | `VYOMKUNJI_PKCS11_MODULE` | Explicit path to a vendor PKCS#11 DLL module | Auto-detected (`WDPKCS.dll` under System32/SysWOW64) |
 | `VYOMKUNJI_TEST_CN` | Filter Common Name (CN) for the `test_sign` utility | None (signs with first available cert) |
 | `VYOMKUNJI_GUI_TEST_PIN` | Token PIN used for unattended automated testing | None (interactive prompt) |
+| `VYOMKUNJI_PIN_TIMEOUT_MIN` | Idle minutes before the in-memory PIN is cleared | `5` |
 | `VYOMKUNJI_MOCK` | Simulates a virtual token for UI development | Unset |
+| `VYOMKUNJI_STARTUP_LOG` | Appends startup timings to `%TEMP%\vyomkunji-startup.log` | Unset |
 
 ---
 

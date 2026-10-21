@@ -16,7 +16,9 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use eframe::egui;
 use fastframe_fonts::Weight;
 use fastframe_shell::{Closed, Headless, Resident};
-use fastframe_tray::{Config, Event, MenuItem, Tray};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem as TiMenuItem, PredefinedMenuItem};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+
 use pkcs11::TokenManager;
 use sha2::{Digest, Sha256};
 use std::sync::mpsc::{Receiver, Sender};
@@ -24,6 +26,30 @@ use std::time::{Duration, Instant};
 use theme::{accent, accent2, border, card, card_hi, err, ok, text, text_dim, text_faint, warn};
 use timeutil::{days_until, now_clock, now_iso};
 use zeroize::Zeroizing;
+
+/// Optional startup tracing: set `VYOMKUNJI_STARTUP_LOG=1` to append timing
+/// lines to `%TEMP%\vyomkunji-startup.log`. The check is cheap and the feature
+/// is off by default, so it does not affect normal launch time.
+fn startup_log(message: &str) {
+    use std::io::Write;
+    if std::env::var_os("VYOMKUNJI_STARTUP_LOG").is_none() {
+        return;
+    }
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("vyomkunji-startup.log"))
+    {
+        let _ = writeln!(
+            file,
+            "{:>8.1} ms  {}",
+            start.elapsed().as_secs_f64() * 1000.0,
+            message
+        );
+    }
+}
 
 #[derive(Clone)]
 struct CertRow {
@@ -104,16 +130,47 @@ impl Nav {
 
 type GuiRequest = (serde_json::Value, Sender<serde_json::Value>);
 
+/// A minimal tray icon built directly on `tray-icon`, so the right-click
+/// context menu is reliably shown (fastframe-tray's menu was not appearing
+/// for some users).
+struct VkTray {
+    icon: TrayIcon,
+    events: Receiver<fastframe_tray::Event>,
+}
+
+impl VkTray {
+    fn events(&self) -> Vec<fastframe_tray::Event> {
+        self.events.try_iter().collect()
+    }
+    fn set_tooltip(&self, text: impl Into<String>) {
+        let _ = self.icon.set_tooltip(Some(text.into()));
+    }
+}
+
+enum ConnectResult {
+    Connected(String, TokenManager, serde_json::Value, String),
+    Failed(String),
+}
+
+struct ConnectOutcome {
+    modules: Vec<String>,
+    result: ConnectResult,
+}
+
 struct App {
     manager: Option<(String, TokenManager)>,
     certs: Vec<CertRow>,
+    token_signature: String,
+    presence_rx: Option<Receiver<Result<String, String>>>,
     selected: usize,
     pending: Option<Pending>,
     gui_rx: Receiver<GuiRequest>,
+    connect_rx: Option<Receiver<ConnectOutcome>>,
     pin: Zeroizing<String>,
     pin_set_at: Option<Instant>,
     pin_timeout: Duration,
     last_token_check: Instant,
+    next_auto_try: Instant,
     selected_module: String,
     module_input: String,
     available_modules: Vec<String>,
@@ -130,7 +187,7 @@ struct App {
     hide_intent: bool,
     quit_requested: bool,
     wants_show: bool,
-    tray: Option<Tray>,
+    tray: Option<VkTray>,
     waker: fastframe_shell::Waker,
     ctx: Option<egui::Context>,
     rendering: Option<fastframe_text::TextRendering>,
@@ -243,18 +300,23 @@ fn cert_rows_from_tokens(tokens: &serde_json::Value) -> Vec<CertRow> {
 
 impl App {
     fn new(waker: &fastframe_shell::Waker) -> Self {
+        startup_log("App::new begin");
         let (tx, rx) = std::sync::mpsc::channel::<GuiRequest>();
         let bridge_port = std::thread::spawn(move || bridge::serve_gui(tx).ok())
             .join()
             .ok()
             .flatten();
 
+        let configured = pkcs11::configured_module_path().unwrap_or_default();
         let mut app = Self {
             manager: None,
             certs: Vec::new(),
+            token_signature: String::new(),
+            presence_rx: None,
             selected: 0,
             pending: None,
             gui_rx: rx,
+            connect_rx: None,
             pin: Zeroizing::new(String::new()),
             pin_set_at: None,
             pin_timeout: Duration::from_secs(
@@ -265,9 +327,10 @@ impl App {
                     * 60,
             ),
             last_token_check: Instant::now(),
-            selected_module: pkcs11::configured_module_path().unwrap_or_default(),
-            module_input: pkcs11::configured_module_path().unwrap_or_default(),
-            available_modules: pkcs11::discover_modules(),
+            next_auto_try: Instant::now(),
+            selected_module: configured.clone(),
+            module_input: configured,
+            available_modules: Vec::new(),
             data_input: "VYOMKUNJI-TEST-PAYLOAD".to_string(),
             status: "Starting…".to_string(),
             status_level: Level::Info,
@@ -287,32 +350,86 @@ impl App {
         };
 
         // The tray is what keeps the app reachable when the window is closed.
-        let wake = waker.clone();
-        let tray = Tray::spawn(
-            Config {
-                id: "vyomkunji",
-                title: "VyomKunji".to_string(),
-                icon: icons::app_icon_rgba,
-                template_icon: None,
-                themed_icon: false,
-                menu: vec![
-                    MenuItem::action("show", "Show VyomKunji"),
-                    MenuItem::action("requests", "Pending requests"),
-                    MenuItem::Separator,
-                    MenuItem::action("quit", "Quit VyomKunji"),
-                ],
-            },
-            move || wake.wake(),
-        );
+        // Built directly on tray-icon so the right-click context menu shows.
+        let wake_for_menu = waker.clone();
+        let wake_for_click = waker.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<fastframe_tray::Event>();
+
+        // Install process-wide handlers before building the icon.
+        let tx_menu = tx.clone();
+        let wake_menu = wake_for_menu.clone();
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let id = event.id.0.as_str();
+            let ev = match id {
+                "show" => Some(fastframe_tray::Event::Menu("show")),
+                "requests" => Some(fastframe_tray::Event::Menu("requests")),
+                "quit" => Some(fastframe_tray::Event::Menu("quit")),
+                _ => None,
+            };
+            if let Some(ev) = ev {
+                if tx_menu.send(ev).is_ok() {
+                    wake_menu.wake();
+                }
+            }
+        }));
+        let tx_click = tx.clone();
+        let wake_click = wake_for_click.clone();
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if tx_click.send(fastframe_tray::Event::Show).is_ok() {
+                    wake_click.wake();
+                }
+            }
+        }));
+
+        let icon_size = 32usize;
+        let icon = Icon::from_rgba(
+            icons::app_icon_rgba(icon_size),
+            icon_size as u32,
+            icon_size as u32,
+        )
+        .ok();
+        let menu = Menu::new();
+        let show_item = TiMenuItem::with_id("show", "Show VyomKunji", true, None);
+        let req_item = TiMenuItem::with_id("requests", "Pending requests", true, None);
+        let quit_item = TiMenuItem::with_id("quit", "Quit VyomKunji", true, None);
+        let _ = menu.append(&show_item);
+        let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&req_item);
+        let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&quit_item);
+
+        let tray = icon.and_then(|ic| {
+            TrayIconBuilder::new()
+                .with_icon(ic)
+                .with_tooltip("VyomKunji")
+                .with_menu(Box::new(menu.clone()))
+                .with_menu_on_left_click(false)
+                .with_menu_on_right_click(true)
+                .build()
+                .ok()
+                .map(|icn| VkTray {
+                    icon: icn,
+                    events: rx,
+                })
+        });
         app.tray = tray;
 
         app.push_log(Level::Info, "VyomKunji started".to_string());
-        app.connect();
+        startup_log("App::new done (window not created yet)");
+        app.connect_async();
+        startup_log("App::new returned");
         app
     }
 
     /// Called for every window: fonts, the desktop's text rendering, theme.
     fn attach(&mut self, ctx: &egui::Context) {
+        startup_log("first frame (attach)");
         self.ctx = Some(ctx.clone());
 
         // Fonts: Inter for the interface, with the desktop's hinting and
@@ -357,33 +474,87 @@ impl App {
         self.push_log(level, text);
     }
 
+    /// Ask for a token connection without blocking the UI. The PKCS#11
+    /// subsystem can take seconds to enumerate drivers and probe tokens, so it
+    /// must never run on the path to the first frame.
     fn connect(&mut self) {
-        match TokenManager::auto() {
-            Ok((module, tm)) => match tm.list_tokens() {
-                Ok(tokens) => {
-                    let rows = cert_rows_from_tokens(&tokens);
-                    let n = rows.len();
-                    self.certs = rows;
-                    self.selected = 0;
-                    self.manager = Some((module, tm));
+        pkcs11::clear_unresponsive();
+        self.connect_async();
+    }
+
+    fn connect_async(&mut self) {
+        if self.connect_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<ConnectOutcome>();
+        self.connect_rx = Some(rx);
+        self.set_status(Level::Info, "Detecting token…".to_string());
+        startup_log("token detection started (background)");
+        let waker = self.waker.clone();
+        std::thread::spawn(move || {
+            let modules = pkcs11::discover_modules();
+            let result = match TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
+                Ok((module, tm, tokens)) => {
+                    let signature = tm.token_signature().unwrap_or_default();
+                    ConnectResult::Connected(module, tm, tokens, signature)
+                }
+                Err(e) => ConnectResult::Failed(e),
+            };
+            let _ = tx.send(ConnectOutcome { modules, result });
+            // Wake the UI so it polls the result even when the window is idle.
+            waker.wake();
+        });
+    }
+
+    fn poll_connect(&mut self) {
+        let outcome = match self.connect_rx.as_ref().map(|rx| rx.try_recv()) {
+            None => return,
+            Some(Ok(outcome)) => {
+                self.connect_rx = None;
+                outcome
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return,
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.connect_rx = None;
+                return;
+            }
+        };
+
+        if !outcome.modules.is_empty() {
+            self.available_modules = outcome.modules;
+        }
+        startup_log("token detection finished");
+
+        match outcome.result {
+            ConnectResult::Connected(module, tm, tokens, signature) => {
+                let rows = cert_rows_from_tokens(&tokens);
+                let n = rows.len();
+                self.certs = rows;
+                self.selected = 0;
+                self.token_signature = signature;
+                pkcs11::save_last_module(&module);
+                // Keep the manager even when no token is inserted: the presence
+                // probe is cheap and will pick the token up on reinsertion.
+                self.manager = Some((module, tm));
+                if n == 0 {
+                    self.set_status(Level::Warn, "No token inserted".to_string());
+                } else {
                     self.set_status(Level::Ok, format!("Token connected · {} certificate(s)", n));
                 }
-                Err(e) => {
-                    self.manager = None;
-                    self.certs.clear();
-                    self.set_status(Level::Err, format!("Token error: {}", e));
-                }
-            },
-            Err(e) => {
+            }
+            ConnectResult::Failed(e) => {
                 self.manager = None;
                 self.certs.clear();
-                self.set_status(Level::Err, format!("No PKCS#11 module: {}", e));
+                self.token_signature.clear();
+                self.selected = 0;
+                self.set_status(Level::Err, format!("Token unavailable: {}", e));
             }
         }
     }
 
-    /// Hot-plug aware refresh: re-check token presence periodically without
-    /// spamming the activity log. Called from pump_requests().
+    /// Hot-plug aware refresh. Only slot presence is checked on the timer;
+    /// reading certificates takes seconds on some tokens, so a changed
+    /// presence/serial triggers a background re-connect instead.
     fn refresh_token(&mut self) {
         // Throttle.
         if self.last_token_check.elapsed() < Duration::from_secs(3) {
@@ -391,62 +562,73 @@ impl App {
         }
         self.last_token_check = Instant::now();
 
-        let manager = self.manager.take();
-        if let Some((module, tm)) = manager {
-            match tm.list_tokens() {
-                Ok(tokens) => {
-                    let new_rows = cert_rows_from_tokens(&tokens);
-                    let old_sig: String = self
-                        .certs
-                        .iter()
-                        .map(|c| format!("{}:{}", c.cn, c.token_serial))
-                        .collect::<Vec<_>>()
-                        .join("|");
-                    let new_sig: String = new_rows
-                        .iter()
-                        .map(|c| format!("{}:{}", c.cn, c.token_serial))
-                        .collect::<Vec<_>>()
-                        .join("|");
-                    if old_sig != new_sig {
-                        let n = new_rows.len();
-                        self.certs = new_rows;
-                        if self.selected >= self.certs.len() {
-                            self.selected = 0;
-                        }
-                        if n == 0 {
-                            self.set_status(Level::Warn, "Token removed".to_string());
-                        } else {
-                            self.set_status(
-                                Level::Ok,
-                                format!("Token updated · {} certificate(s)", n),
-                            );
-                        }
-                    }
-                    self.manager = Some((module, tm));
-                }
-                Err(_) => {
-                    self.manager = None;
+        if let Some((_module, tm)) = &self.manager {
+            // Probe presence on a worker: even the cheap slot query blocks for
+            // ~150 ms on some drivers, which is visible as a stutter if done
+            // on the UI thread every few seconds.
+            if self.presence_rx.is_some() {
+                return;
+            }
+            let tm = tm.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.presence_rx = Some(rx);
+            let waker = self.waker.clone();
+            std::thread::spawn(move || {
+                let signature = tm.token_signature();
+                let _ = tx.send(signature);
+                waker.wake();
+            });
+        } else if self.connect_rx.is_none() && Instant::now() >= self.next_auto_try {
+            // Re-discover a module in the background, at most every 10 s.
+            self.next_auto_try = Instant::now() + Duration::from_secs(10);
+            self.connect_async();
+        }
+    }
+
+    /// Apply the result of a background token-presence probe.
+    fn poll_presence(&mut self) {
+        let result = match self.presence_rx.as_ref().map(|rx| rx.try_recv()) {
+            None => return,
+            Some(Ok(result)) => {
+                self.presence_rx = None;
+                result
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return,
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.presence_rx = None;
+                return;
+            }
+        };
+
+        match result {
+            Ok(signature) => {
+                if signature == self.token_signature {
+                    // No change since the last probe.
+                } else if signature.is_empty() {
+                    // Token removed. Keep the manager: the presence probe is
+                    // cheap, so reinsertion is picked up without re-initialising
+                    // every driver.
+                    self.certs.clear();
+                    self.token_signature.clear();
+                    self.selected = 0;
+                    self.set_status(Level::Warn, "Token removed".to_string());
+                } else {
+                    // A different token is in the reader: reload certificates
+                    // in the background rather than blocking the UI.
                     self.certs.clear();
                     self.selected = 0;
-                    self.set_status(Level::Warn, "Token disconnected".to_string());
-                }
-            }
-        } else {
-            // Try to (re)discover a module.
-            if let Ok((module, tm)) = TokenManager::auto() {
-                if let Ok(tokens) = tm.list_tokens() {
-                    let rows = cert_rows_from_tokens(&tokens);
-                    let n = rows.len();
-                    self.certs = rows;
-                    self.selected = 0;
-                    self.manager = Some((module, tm));
-                    if n > 0 {
-                        self.set_status(
-                            Level::Ok,
-                            format!("Token connected · {} certificate(s)", n),
-                        );
+                    self.token_signature = signature;
+                    if self.connect_rx.is_none() {
+                        self.connect_async();
                     }
                 }
+            }
+            Err(_) => {
+                self.manager = None;
+                self.certs.clear();
+                self.token_signature.clear();
+                self.selected = 0;
+                self.set_status(Level::Warn, "Token disconnected".to_string());
             }
         }
     }
@@ -543,6 +725,9 @@ impl App {
         });
         self.nav = Nav::Requests;
         self.wants_show = true;
+        if self.manager.is_none() {
+            self.connect_async();
+        }
         if let Some(tray) = self.tray.as_mut() {
             tray.set_tooltip(format!("VyomKunji\nWaiting for approval: {}", portal));
         }
@@ -631,6 +816,8 @@ impl App {
         while let Ok((req, resp)) = self.gui_rx.try_recv() {
             self.accept_request(req, resp);
         }
+        self.poll_connect();
+        self.poll_presence();
         self.refresh_token();
     }
 
@@ -639,11 +826,13 @@ impl App {
         let Some(tray) = &self.tray else { return };
         for event in tray.events() {
             match event {
-                Event::Menu("quit") => {
+                fastframe_tray::Event::Menu("quit") => {
                     self.quit_requested = true;
                     self.wants_show = false;
                 }
-                Event::Menu("show") | Event::Toggle | Event::Show => {
+                fastframe_tray::Event::Menu("show")
+                | fastframe_tray::Event::Toggle
+                | fastframe_tray::Event::Show => {
                     self.wants_show = true;
                     if let Some(ctx) = &self.ctx {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -652,7 +841,7 @@ impl App {
                         ));
                     }
                 }
-                Event::Menu("requests") => {
+                fastframe_tray::Event::Menu("requests") => {
                     self.nav = Nav::Requests;
                     self.wants_show = true;
                 }
@@ -825,6 +1014,12 @@ impl App {
             ui.add_space(6.0);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Quit").clicked() {
+                    self.quit_requested = true;
+                    if let Some(ctx) = &self.ctx {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
                 if ui.button("Refresh token").clicked() {
                     self.connect();
                 }
@@ -966,7 +1161,7 @@ impl App {
                 );
             }
             ui.label(
-                egui::RichText::new("VyomKunji 0.2.3")
+                egui::RichText::new("VyomKunji 0.3.0")
                     .font(Weight::Regular.font_id(10.0))
                     .color(text_faint()),
             );
@@ -1493,7 +1688,9 @@ impl App {
                     self.connect();
                 }
                 if ui.button("Refresh list").clicked() {
-                    self.available_modules = pkcs11::discover_modules();
+                    pkcs11::clear_unresponsive();
+                    self.available_modules = pkcs11::rescan_modules();
+                    self.connect();
                 }
             });
 
@@ -1524,6 +1721,14 @@ impl App {
                 kv(ui, "Active module", m, true);
             } else {
                 kv(ui, "Active module", "(none)", false);
+            }
+
+            ui.add_space(14.0);
+            if ui.button("Quit VyomKunji").clicked() {
+                self.quit_requested = true;
+                if let Some(ctx) = &self.ctx {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             }
         });
     }
@@ -1614,6 +1819,7 @@ fn native_options() -> eframe::NativeOptions {
 }
 
 fn main() -> Result<(), eframe::Error> {
+    startup_log("main() entered");
     let waker = fastframe_shell::Waker::default();
     let app = App::new(&waker);
     fastframe_shell::Shell::new(app, &waker)

@@ -7,7 +7,7 @@ use std::io::Write;
 mod pkcs11;
 
 fn main() {
-    let (module, tm) = match pkcs11::TokenManager::auto() {
+    let (module, tm, tokens) = match pkcs11::TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("FAILED: {}", e);
@@ -16,7 +16,6 @@ fn main() {
     };
     println!("module: {}", module);
 
-    let tokens = tm.list_tokens().expect("list");
     for t in tokens.as_array().unwrap() {
         println!("TOKEN {} ({})", t["label"], t["serial"]);
         for c in t["certs"].as_array().unwrap() {

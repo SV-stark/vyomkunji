@@ -8,9 +8,16 @@ use cryptoki::types::AuthPin;
 use serde_json::{json, Value};
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct TokenManager {
     pkcs11: Pkcs11,
 }
+
+/// How long to wait for a single driver to initialise and list its token.
+/// Cold starts and antivirus scans can make vendor DLLs slow, so this is
+/// deliberately generous; a driver that exceeds it is treated as unresponsive
+/// and skipped for the rest of the session.
+pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// Optional explicit override via environment variable. Accepts either a single
 /// DLL path or a directory (scanned recursively).
@@ -83,6 +90,40 @@ pub fn save_configured_module(path: Option<&str>) -> std::io::Result<()> {
         )
     };
     std::fs::write(cfg, json)
+}
+
+/// Remember which module last produced a token, so the next launch can try it
+/// first instead of initialising every installed driver. This is only a hint:
+/// `auto()` still falls back to the full candidate list.
+fn last_module_file() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(
+        std::path::PathBuf::from(appdata)
+            .join("VyomKunji")
+            .join("last_module.txt"),
+    )
+}
+
+fn last_module_hint() -> Option<String> {
+    let text = std::fs::read_to_string(last_module_file()?).ok()?;
+    let value = text.trim();
+    if value.is_empty() || !Path::new(value).is_file() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+/// Record the module that successfully exposed a token (used as a fast-path
+/// hint on the next start).
+#[allow(dead_code)]
+pub fn save_last_module(path: &str) {
+    let Some(file) = last_module_file() else {
+        return;
+    };
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(file, path.trim());
 }
 
 fn push_if_exists(out: &mut Vec<String>, p: String) {
@@ -249,67 +290,265 @@ fn scan_dir_for_pkcs11(root: &std::path::Path, depth: usize, out: &mut Vec<Strin
         Err(_) => return,
     };
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                let lower = name.to_lowercase();
-                if !lower.ends_with(".dll") {
-                    continue;
-                }
-                let known = known_dll_names()
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(name));
-                let pattern = lower.contains("pkcs")
-                    || lower.contains("cryptoki")
-                    || lower.contains("token")
-                    || lower.contains("csp11")
-                    || lower.contains("safesign")
-                    || lower.contains("aet")
-                    || lower.contains("starcos")
-                    || lower.contains("inna")
-                    || lower.contains("precision");
-                if known || pattern {
-                    let ps = path.to_string_lossy().to_string();
-                    if !out.iter().any(|x| x.eq_ignore_ascii_case(&ps)) {
-                        out.push(ps);
-                    }
+        // `DirEntry::file_type` reuses the attributes Windows already returned
+        // from the directory read; `Path::is_file` would stat every entry again
+        // and was a measurable part of the startup scan.
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if file_type.is_file() {
+            let name = match entry.file_name().to_str() {
+                Some(s) => s.to_ascii_lowercase(),
+                None => continue,
+            };
+            if !name.ends_with(".dll") {
+                continue;
+            }
+            let known = known_dll_names()
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(&name));
+            let pattern = name.contains("pkcs")
+                || name.contains("cryptoki")
+                || name.contains("token")
+                || name.contains("csp11")
+                || name.contains("safesign")
+                || name.contains("aet")
+                || name.contains("starcos")
+                || name.contains("inna")
+                || name.contains("precision");
+            if known || pattern {
+                let ps = entry.path().to_string_lossy().to_string();
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(&ps)) {
+                    out.push(ps);
                 }
             }
-        } else if path.is_dir() && depth > 1 {
-            scan_dir_for_pkcs11(&path, depth - 1, out);
+        } else if file_type.is_dir() && depth > 1 {
+            scan_dir_for_pkcs11(&entry.path(), depth - 1, out);
         }
     }
 }
 
+/// Read a DLL's PE export table and report whether it exports
+/// `C_GetFunctionList`. This is deliberately done by parsing the file instead
+/// of `LoadLibraryW` + `GetProcAddress`: loading every candidate runs vendor
+/// `DllMain` code and was measured at ~3 s on a machine with three token
+/// drivers, which dominated cold start.
 #[cfg(windows)]
 fn has_pkcs11_entrypoint(path: &str) -> bool {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn LoadLibraryW(lpfilename: *const u16) -> *mut std::ffi::c_void;
-        fn GetProcAddress(
-            hmodule: *mut std::ffi::c_void,
-            lpprocname: *const i8,
-        ) -> *mut std::ffi::c_void;
-        fn FreeLibrary(hlibmodule: *mut std::ffi::c_void) -> i32;
+    use std::io::{Read, Seek, SeekFrom};
+
+    fn u16_at(b: &[u8], off: usize) -> Option<u16> {
+        b.get(off..off + 2)
+            .map(|s| u16::from_le_bytes([s[0], s[1]]))
     }
-    let wide: Vec<u16> = OsStr::new(path)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        let h = LoadLibraryW(wide.as_ptr());
-        if h.is_null() {
-            return false;
+    fn u32_at(b: &[u8], off: usize) -> Option<u32> {
+        b.get(off..off + 4)
+            .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    }
+
+    // (virtual address, virtual size, raw size, raw pointer)
+    type Section = (u32, u32, u32, u32);
+
+    fn rva_to_offset(sections: &[Section], rva: u32) -> Option<u64> {
+        for &(va, vsize, raw_size, raw_ptr) in sections {
+            if rva < va {
+                continue;
+            }
+            let delta = rva - va;
+            if delta >= vsize.max(raw_size) {
+                continue;
+            }
+            if delta >= raw_size {
+                return None;
+            }
+            return Some(raw_ptr as u64 + delta as u64);
         }
-        let proc = GetProcAddress(h, c"C_GetFunctionList".as_ptr());
-        let _ = FreeLibrary(h);
-        !proc.is_null()
+        None
     }
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    let mut dos = [0u8; 64];
+    if file.read_exact(&mut dos).is_err() || &dos[0..2] != b"MZ" {
+        return false;
+    }
+    let pe_offset = u32_at(&dos, 0x3c).unwrap_or(0) as u64;
+
+    // PE signature + COFF header + optional header + section table.
+    let mut header = vec![0u8; 0x4000];
+    if file.seek(SeekFrom::Start(pe_offset)).is_err() {
+        return false;
+    }
+    let read = file.read(&mut header).unwrap_or(0);
+    header.truncate(read);
+    if header.get(0..4) != Some(b"PE\0\0") {
+        return false;
+    }
+
+    let coff = 4;
+    let machine = match u16_at(&header, coff) {
+        Some(m) => m,
+        None => return false,
+    };
+
+    // Only accept modules this process can actually load. This also keeps the
+    // 32-bit SysWOW64 copies out of the candidate list on a 64-bit build.
+    let host_machine = if cfg!(target_arch = "x86_64") {
+        0x8664
+    } else if cfg!(target_arch = "x86") {
+        0x014c
+    } else if cfg!(target_arch = "aarch64") {
+        0xaa64
+    } else {
+        0
+    };
+    if host_machine != 0 && machine != host_machine {
+        return false;
+    }
+
+    let section_count = match u16_at(&header, coff + 2) {
+        Some(n) => n as usize,
+        None => return false,
+    };
+    let optional_size = match u16_at(&header, coff + 16) {
+        Some(n) => n as usize,
+        None => return false,
+    };
+
+    let optional = coff + 20;
+    let magic = match u16_at(&header, optional) {
+        Some(m) => m,
+        None => return false,
+    };
+    let data_directory = match magic {
+        0x10b => optional + 96,  // PE32
+        0x20b => optional + 112, // PE32+
+        _ => return false,
+    };
+
+    let export_rva = match u32_at(&header, data_directory) {
+        Some(v) => v,
+        None => return false,
+    };
+    let export_size = match u32_at(&header, data_directory + 4) {
+        Some(v) => v,
+        None => return false,
+    };
+    if export_rva == 0 || export_size == 0 {
+        return false;
+    }
+
+    let section_table = optional + optional_size;
+    let mut sections = Vec::with_capacity(section_count);
+    for index in 0..section_count {
+        let entry = section_table + index * 40;
+        let vsize = match u32_at(&header, entry + 8) {
+            Some(v) => v,
+            None => return false,
+        };
+        let va = match u32_at(&header, entry + 12) {
+            Some(v) => v,
+            None => return false,
+        };
+        let raw_size = match u32_at(&header, entry + 16) {
+            Some(v) => v,
+            None => return false,
+        };
+        let raw_ptr = match u32_at(&header, entry + 20) {
+            Some(v) => v,
+            None => return false,
+        };
+        sections.push((va, vsize, raw_size, raw_ptr));
+    }
+
+    // IMAGE_EXPORT_DIRECTORY: NumberOfNames at +24, AddressOfNames at +32.
+    let export_offset = match rva_to_offset(&sections, export_rva) {
+        Some(off) => off,
+        None => return false,
+    };
+    if file.seek(SeekFrom::Start(export_offset)).is_err() {
+        return false;
+    }
+    let mut export_dir = [0u8; 40];
+    if file.read_exact(&mut export_dir).is_err() {
+        return false;
+    }
+    let name_count = match u32_at(&export_dir, 24) {
+        Some(n) if n > 0 && n <= 65_536 => n as usize,
+        _ => return false,
+    };
+    let names_rva = match u32_at(&export_dir, 32) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let names_offset = match rva_to_offset(&sections, names_rva) {
+        Some(off) => off,
+        None => return false,
+    };
+    if file.seek(SeekFrom::Start(names_offset)).is_err() {
+        return false;
+    }
+    let mut name_rvas = vec![0u8; name_count * 4];
+    if file.read_exact(&mut name_rvas).is_err() {
+        return false;
+    }
+
+    for index in 0..name_count {
+        let rva = u32::from_le_bytes([
+            name_rvas[index * 4],
+            name_rvas[index * 4 + 1],
+            name_rvas[index * 4 + 2],
+            name_rvas[index * 4 + 3],
+        ]);
+        let offset = match rva_to_offset(&sections, rva) {
+            Some(off) => off,
+            None => continue,
+        };
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            continue;
+        }
+        let mut name = [0u8; 128];
+        let read = file.read(&mut name).unwrap_or(0);
+        let end = name[..read].iter().position(|&b| b == 0).unwrap_or(read);
+        if &name[..end] == b"C_GetFunctionList" {
+            return true;
+        }
+    }
+    false
 }
 
+/// In-process cache: discovery is expensive (directory walk + PE reads) and
+/// `auto()` used to repeat it on every call, including every hot-plug poll.
+static MODULE_CACHE: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
 fn discover_modules_impl() -> Vec<String> {
+    let mut cache = MODULE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(modules) = cache.as_ref() {
+        return modules.clone();
+    }
+    let modules = scan_modules_uncached();
+    *cache = Some(modules.clone());
+    modules
+}
+
+/// Force a fresh scan (used by the GUI's "Refresh list" action).
+#[allow(dead_code)]
+pub fn rescan_modules() -> Vec<String> {
+    let modules = scan_modules_uncached();
+    *MODULE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(modules.clone());
+    modules
+}
+
+fn scan_modules_uncached() -> Vec<String> {
     let mut v = Vec::new();
 
     // Vendor-specific directories (deeper scan).
@@ -362,6 +601,43 @@ fn discover_modules_impl() -> Vec<String> {
     deduped
 }
 
+/// Modules that timed out while being probed. Some drivers hang forever when a
+/// reader is present but no card is inserted; skipping them for the session
+/// keeps hot-plug polling responsive. `clear_unresponsive` (Settings → Refresh
+/// list) re-enables them.
+static UNRESPONSIVE: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+fn is_unresponsive(path: &str) -> bool {
+    let guard = UNRESPONSIVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .as_ref()
+        .map(|set| set.contains(&path.to_ascii_lowercase()))
+        .unwrap_or(false)
+}
+
+fn mark_unresponsive(path: &str) {
+    let mut guard = UNRESPONSIVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert(path.to_ascii_lowercase());
+}
+
+/// Allow previously unresponsive drivers to be probed again.
+#[allow(dead_code)]
+pub fn clear_unresponsive() {
+    let mut guard = UNRESPONSIVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .get_or_insert_with(std::collections::HashSet::new)
+        .clear();
+}
+
 fn default_module_paths() -> Vec<String> {
     // Environment variable wins (automation).
     if let Some(p) = env_module_override() {
@@ -387,7 +663,23 @@ fn default_module_paths() -> Vec<String> {
         }
         return vec![p];
     }
-    discover_modules_impl()
+    let mut modules = discover_modules_impl();
+
+    // Fast path: try the module that worked last time before probing all of
+    // the others. If it no longer has the token, `auto()` continues down the
+    // list as usual.
+    if let Some(last) = last_module_hint() {
+        if let Some(index) = modules
+            .iter()
+            .position(|module| module.eq_ignore_ascii_case(&last))
+        {
+            let module = modules.remove(index);
+            modules.insert(0, module);
+        } else {
+            modules.insert(0, last);
+        }
+    }
+    modules
 }
 
 /// Public alias used by the GUI module picker.
@@ -407,53 +699,72 @@ pub struct CertInfo {
 }
 
 impl TokenManager {
-    /// Auto-detect and load a PKCS#11 module, returning (module_path, manager).
+    /// Detect a module and return it together with its token list.
     ///
-    /// Unlike the previous implementation, this tries *every* candidate module
-    /// instead of giving up on the first one that fails to initialise, and it
-    /// prefers a module that actually exposes an inserted token. This makes
-    /// detection robust across the many Indian CA token drivers (ProxKey,
-    /// eMudhra, (n)Code, SafeScrypt, Capricorn, Pantasign, Vsign, ...).
-    pub fn auto() -> Result<(String, Self), String> {
+    /// Every candidate is probed on its own thread with a timeout. Some vendor
+    /// drivers block indefinitely when a reader is present but no card is
+    /// inserted; without the timeout detection would never finish. A driver
+    /// that times out is skipped for the rest of the session, and the user can
+    /// explicitly retry from Settings.
+    pub fn auto_connected(
+        timeout: std::time::Duration,
+    ) -> Result<(String, Self, serde_json::Value), String> {
         let candidates = default_module_paths();
         if candidates.is_empty() {
             return Err("No PKCS#11 module found (set VYOMKUNJI_PKCS11_MODULE)".to_string());
         }
 
         let mut last_err = String::new();
-        let mut fallback: Option<(String, Self)> = None;
+        let mut fallback: Option<(String, Self, serde_json::Value)> = None;
 
-        for p in candidates {
-            if !Path::new(&p).exists() {
+        for path in candidates {
+            if !Path::new(&path).exists() || is_unresponsive(&path) {
                 continue;
             }
-            match Self::new(&p) {
-                Ok(m) => {
-                    // Prefer a module that actually exposes an inserted token.
-                    let has_token = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        m.pkcs11
-                            .get_slots_with_token()
-                            .map(|s| !s.is_empty())
-                            .unwrap_or(false)
-                    }))
-                    .unwrap_or(false);
-                    if has_token {
-                        return Ok((p, m));
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            let worker_path = path.clone();
+            std::thread::spawn(move || {
+                let result = (|| {
+                    let manager = Self::new(&worker_path)?;
+                    let tokens = manager.list_tokens()?;
+                    Ok::<_, String>((manager, tokens))
+                })();
+                let _ = tx.send(result);
+            });
+
+            match rx.recv_timeout(timeout) {
+                Ok(Ok((manager, tokens))) => {
+                    let has_certs = tokens
+                        .as_array()
+                        .map(|items| !items.is_empty())
+                        .unwrap_or(false);
+                    if has_certs {
+                        return Ok((path, manager, tokens));
                     }
+                    // Keep the first module that loaded but exposed no
+                    // certificates, so a scanned-but-empty token still reports
+                    // a useful status instead of "no module".
                     if fallback.is_none() {
-                        fallback = Some((p, m));
+                        fallback = Some((path, manager, tokens));
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     if last_err.is_empty() {
-                        last_err = format!("{}: {}", p, e);
+                        last_err = format!("{}: {}", path, e);
+                    }
+                }
+                Err(_) => {
+                    mark_unresponsive(&path);
+                    if last_err.is_empty() {
+                        last_err = format!("{}: driver did not respond", path);
                     }
                 }
             }
         }
 
-        if let Some(fb) = fallback {
-            return Ok(fb);
+        if let Some(fallback) = fallback {
+            return Ok(fallback);
         }
         Err(if last_err.is_empty() {
             "No PKCS#11 module found (set VYOMKUNJI_PKCS11_MODULE)".to_string()
@@ -476,6 +787,28 @@ impl TokenManager {
             Ok(Err(e)) => Err(e),
             Err(_) => Err(format!("panic while loading {}", module_path)),
         }
+    }
+
+    /// Cheap token-presence fingerprint: label + serial for every slot with a
+    /// token. Unlike [`Self::list_tokens`] this does not read certificates, so
+    /// it is safe to call from the UI thread on a timer.
+    #[allow(dead_code)]
+    pub fn token_signature(&self) -> Result<String, String> {
+        let slots = self
+            .pkcs11
+            .get_slots_with_token()
+            .map_err(|e| e.to_string())?;
+        let mut parts = Vec::with_capacity(slots.len());
+        for slot in slots {
+            if let Ok(info) = self.pkcs11.get_token_info(slot) {
+                parts.push(format!(
+                    "{}:{}",
+                    info.label().trim(),
+                    info.serial_number().trim()
+                ));
+            }
+        }
+        Ok(parts.join("|"))
     }
 
     /// Human-readable metadata extracted from a DER certificate.

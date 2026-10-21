@@ -124,7 +124,7 @@ fn handle(req: &Req, mock: bool) -> Resp {
         return Resp {
             id: req.id.clone(),
             ok: true,
-            version: Some("0.2.3".to_string()),
+            version: Some("0.3.0".to_string()),
             module: None,
             token_connected: None,
             cert_selected: None,
@@ -140,45 +140,51 @@ fn handle(req: &Req, mock: bool) -> Resp {
         return handle_mock(req, err);
     }
 
-    // Real PKCS#11 path
-    let (module, tm) = match TokenManager::auto() {
-        Ok(v) => v,
-        Err(e) => return err("NO_PKCS11_MODULE", e),
-    };
-
+    // Real PKCS#11 path. Initialise lazily per operation so a signature that
+    // the GUI will handle never pays for (or blocks on) a token probe here.
     match req.rtype.as_str() {
-        "status" => match tm.list_tokens() {
-            Ok(t) => Resp {
+        "status" => {
+            let (module, _tm, tokens) = match TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
+                Ok(v) => v,
+                Err(e) => return err("NO_PKCS11_MODULE", e),
+            };
+            let cert_selected = tokens
+                .as_array()
+                .map(|items| !items.is_empty())
+                .unwrap_or(false);
+            Resp {
                 id: req.id.clone(),
                 ok: true,
                 version: None,
                 module: Some(module),
                 token_connected: Some(true),
-                cert_selected: Some(t.as_array().map(|a| !a.is_empty()).unwrap_or(false)),
+                cert_selected: Some(cert_selected),
                 tokens: None,
                 signature: None,
                 cert: None,
                 signed_at: None,
                 error: None,
-            },
-            Err(e) => err("TOKEN_ERROR", e),
-        },
-        "listTokens" => match tm.list_tokens() {
-            Ok(t) => Resp {
+            }
+        }
+        "listTokens" => {
+            let (module, _tm, tokens) = match TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
+                Ok(v) => v,
+                Err(e) => return err("NO_PKCS11_MODULE", e),
+            };
+            Resp {
                 id: req.id.clone(),
                 ok: true,
                 version: None,
                 module: Some(module),
                 token_connected: Some(true),
                 cert_selected: None,
-                tokens: Some(t),
+                tokens: Some(tokens),
                 signature: None,
                 cert: None,
                 signed_at: None,
                 error: None,
-            },
-            Err(e) => err("TOKEN_ERROR", e),
-        },
+            }
+        }
         "sign" => {
             let payload = req.payload.clone().unwrap_or(Value::Null);
             let data_b64 = payload.get("data").and_then(|v| v.as_str()).unwrap_or("");
@@ -212,7 +218,7 @@ fn handle(req: &Req, mock: bool) -> Resp {
                         id: req.id.clone(),
                         ok: true,
                         version: None,
-                        module: Some(module),
+                        module: None,
                         token_connected: Some(true),
                         cert_selected: Some(true),
                         tokens: None,
@@ -254,6 +260,10 @@ fn handle(req: &Req, mock: bool) -> Resp {
                     "GUI not running and no PIN provided".to_string(),
                 );
             }
+            let (module, tm, _tokens) = match TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
+                Ok(v) => v,
+                Err(e) => return err("NO_PKCS11_MODULE", e),
+            };
             match tm.sign(pin, &bytes, cn, already_hashed) {
                 Ok(r) => Resp {
                     id: req.id.clone(),

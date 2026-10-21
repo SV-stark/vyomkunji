@@ -6,7 +6,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.3.0] — 2026-10-21
 
 ### Added
 - **AGPL-3.0 License**: Added GNU Affero General Public License version 3.0 (`LICENSE`).
@@ -23,13 +23,24 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `docs/USAGE.md` — full end-to-end guide to signing on a portal.
 - `docs/THEME.md` — how to write a palette file.
 - Git repository with `master` (egui 0.31 baseline) and `feat/fastframe-shell` branches.
+- **Startup diagnostics**: setting `VYOMKUNJI_STARTUP_LOG=1` appends timestamped startup milestones to `%TEMP%\vyomkunji-startup.log`.
 
 ### Changed
 - **egui / eframe 0.31 → 0.36.2** (the new `App::ui` API, `Panel::top/left/bottom`).
 - **PKCS#11 auto-detection broadened**: added SafeNet/Gemalto, G&D StarSign (SafeSign), Precision InnaIT, and mToken (CryptoID) module names/directories, plus `safesign`/`aet`/`starcos`/`inna`/`precision`/`csp11` scan patterns.
+- The native host initialises PKCS#11 lazily and only after the GUI bridge declines a signature request.
 - The GUI was redesigned: sidebar navigation, card-based screens, certificate grid with
   expiry colouring, request approval card, activity log, status bar.
-- Release binary grew from 4.99 MB to 8.77 MB (Inter, tray and shell crates).
+- Release binary grew from 4.99 MB to 8.53 MB (Inter, tray and shell crates; stripped release profile).
+- **Version bumped to `0.3.0`** across Cargo, extension manifests, installer, and documentation.
+
+### Performance
+- **Cold start is now ~10× faster on the UI path.** Module discovery parses each DLL's PE export table for `C_GetFunctionList` instead of calling `LoadLibraryW`, and the directory walk uses the file type Windows already returned (`DirEntry::file_type`) rather than re-statting every entry. On the test machine discovery fell from **3.06 s to ~0.13 s**.
+- PKCS#11 detection now runs on a background thread. The window paints immediately (**~210–260 ms to first frame** in release builds) and shows “Detecting token…” while the driver is probed.
+- Discovery results are cached for the process; the module that last exposed a token is remembered in `%APPDATA%\VyomKunji\last_module.txt` and tried first on the next launch.
+- Driver probes have a 6-second timeout. A hung vendor driver is skipped for the session instead of blocking detection forever; Settings → Refresh list re-enables it.
+- Hot-plug polling uses a cheap slot label/serial query on a worker thread instead of re-reading every certificate on the UI thread (which blocked for ~2.5 s per token on the test machine).
+- Release builds use thin LTO, one codegen unit, and stripped symbols.
 
 ### Fixed
 - The `✓` glyph is drawn by the painter instead of the font, so it no longer depends on

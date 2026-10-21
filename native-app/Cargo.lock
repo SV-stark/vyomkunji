@@ -3439,7 +3439,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vyomkunji"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "base64",
  "cryptoki",
@@ -3455,6 +3455,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tray-icon",
  "uuid",
  "x509-parser",
  "zeroize",
