@@ -2,7 +2,7 @@
 ; Build with ISCC.exe installer\vyomkunji.iss
 
 #define MyAppName "VyomKunji"
-#define MyAppVersion "0.2.1"
+#define MyAppVersion "0.2.2"
 #define MyAppPublisher "VyomKunji Contributors"
 #define MyAppURL "https://github.com/SV-stark/vyomkunji"
 

@@ -43,6 +43,11 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.2] — 2026-10-21
+
+### Added
+- **GUI PKCS#11 module picker**: Settings screen with a module path field, a dropdown of discovered modules, Apply/Auto-detect/Refresh actions, persisted to `%APPDATA%\\VyomKunji\\config.json`.
+
 ## [0.2.1] — 2026-10-21
 
 ### Fixed

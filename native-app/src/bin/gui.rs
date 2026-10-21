@@ -77,6 +77,7 @@ enum Nav {
     Certificates,
     Sign,
     Activity,
+    Settings,
 }
 
 impl Nav {
@@ -86,6 +87,7 @@ impl Nav {
             Nav::Certificates => "Certificates",
             Nav::Sign => "Sign manually",
             Nav::Activity => "Activity",
+            Nav::Settings => "Settings",
         }
     }
     fn hint(self) -> &'static str {
@@ -94,6 +96,7 @@ impl Nav {
             Nav::Certificates => "Certificates found on the connected token",
             Nav::Sign => "Test the token with arbitrary data",
             Nav::Activity => "Audit trail of everything that happened",
+            Nav::Settings => "PKCS#11 module and preferences",
         }
     }
 }
@@ -110,6 +113,9 @@ struct App {
     pin_set_at: Option<Instant>,
     pin_timeout: Duration,
     last_token_check: Instant,
+    selected_module: String,
+    module_input: String,
+    available_modules: Vec<String>,
     data_input: String,
     status: String,
     status_level: Level,
@@ -258,6 +264,9 @@ impl App {
                     * 60,
             ),
             last_token_check: Instant::now(),
+            selected_module: pkcs11::configured_module_path().unwrap_or_default(),
+            module_input: pkcs11::configured_module_path().unwrap_or_default(),
+            available_modules: pkcs11::discover_modules(),
             data_input: "VYOMKUNJI-TEST-PAYLOAD".to_string(),
             status: "Starting…".to_string(),
             status_level: Level::Info,
@@ -775,6 +784,7 @@ impl eframe::App for App {
                 Nav::Certificates => self.view_certificates(ui),
                 Nav::Sign => self.view_sign(ui),
                 Nav::Activity => self.view_activity(ui),
+                Nav::Settings => self.view_settings(ui),
             });
 
         let esc_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -872,6 +882,7 @@ impl App {
             (Nav::Certificates, false),
             (Nav::Sign, false),
             (Nav::Activity, false),
+            (Nav::Settings, false),
         ];
         for (nav, badge) in items {
             let selected = self.nav == nav;
@@ -954,7 +965,7 @@ impl App {
                 );
             }
             ui.label(
-                egui::RichText::new("VyomKunji 0.2.1")
+                egui::RichText::new("VyomKunji 0.2.2")
                     .font(Weight::Regular.font_id(10.0))
                     .color(text_faint()),
             );
@@ -1434,6 +1445,86 @@ impl App {
                 }
             });
         }
+    }
+
+    fn view_settings(&mut self, ui: &mut egui::Ui) {
+        self.view_header(ui);
+
+        theme::card_frame(None).show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("PKCS#11 module")
+                    .font(Weight::SemiBold.font_id(14.0))
+                    .color(text()),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Override auto-detection with a specific module. Leave empty for auto-detect.",
+                )
+                .size(12.0)
+                .color(text_faint()),
+            );
+            ui.add_space(10.0);
+
+            ui.label(
+                egui::RichText::new("Module path")
+                    .color(text_faint())
+                    .size(12.0),
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut self.module_input)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("C:\\Windows\\System32\\...\\module.dll"),
+            );
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    let p = self.module_input.trim().to_string();
+                    let to_save = if p.is_empty() { None } else { Some(p.as_str()) };
+                    let _ = pkcs11::save_configured_module(to_save);
+                    self.selected_module = p.clone();
+                    self.connect();
+                }
+                if ui.button("Auto-detect").clicked() {
+                    self.module_input.clear();
+                    self.selected_module.clear();
+                    let _ = pkcs11::save_configured_module(None);
+                    self.connect();
+                }
+                if ui.button("Refresh list").clicked() {
+                    self.available_modules = pkcs11::discover_modules();
+                }
+            });
+
+            if !self.available_modules.is_empty() {
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new("Discovered modules")
+                        .color(text_faint())
+                        .size(12.0),
+                );
+                egui::ComboBox::from_id_salt("modcombo")
+                    .selected_text(if self.module_input.is_empty() {
+                        "(auto-detect)".to_string()
+                    } else {
+                        self.module_input.clone()
+                    })
+                    .show_ui(ui, |ui| {
+                        for m in self.available_modules.clone() {
+                            if ui.selectable_label(self.module_input == m, &m).clicked() {
+                                self.module_input = m;
+                            }
+                        }
+                    });
+            }
+
+            ui.add_space(10.0);
+            if let Some((m, _)) = &self.manager {
+                kv(ui, "Active module", m, true);
+            } else {
+                kv(ui, "Active module", "(none)", false);
+            }
+        });
     }
 
     fn view_activity(&mut self, ui: &mut egui::Ui) {

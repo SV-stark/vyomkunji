@@ -12,14 +12,77 @@ pub struct TokenManager {
     pkcs11: Pkcs11,
 }
 
-/// Optional explicit override. Accepts either a single DLL path or a directory
-/// (in which case the directory is scanned recursively for PKCS#11 modules).
+/// Optional explicit override via environment variable. Accepts either a single
+/// DLL path or a directory (scanned recursively).
 fn env_module_override() -> Option<String> {
     std::env::var("VYOMKUNJI_PKCS11_MODULE")
         .or_else(|_| std::env::var("SIGNER_PKCS11_MODULE"))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// Path to the VyomKunji user config file.
+pub fn config_path() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(
+        std::path::PathBuf::from(appdata)
+            .join("VyomKunji")
+            .join("config.json"),
+    )
+}
+
+/// Read a user-configured PKCS#11 module path from config.json, if present
+/// and pointing at an existing file.
+pub fn configured_module_path() -> Option<String> {
+    let path = config_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    // Minimal JSON parse without pulling in a parser dependency: look for
+    // "pkcs11Module": "...".
+    let key = "\"pkcs11Module\"";
+    let idx = text.find(key)?;
+    let rest = &text[idx + key.len()..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let rest = &rest[1..];
+    let end = rest.find('"')?;
+    let val = rest[..end].to_string();
+    if val.is_empty() {
+        return None;
+    }
+    if std::path::Path::new(&val).is_file() {
+        Some(val)
+    } else {
+        None
+    }
+}
+
+/// Persist (or clear) the user-configured PKCS#11 module path.
+#[allow(dead_code)]
+pub fn save_configured_module(path: Option<&str>) -> std::io::Result<()> {
+    let cfg = config_path()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set"))?;
+    if let Some(parent) = cfg.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let value = match path {
+        Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => String::new(),
+    };
+    // Preserve any other keys by rewriting a minimal object; config only holds
+    // this key today.
+    let json = if value.is_empty() {
+        "{}".to_string()
+    } else {
+        format!(
+            "{{\"pkcs11Module\":\"{}\"}}",
+            value.replace("\\\\", "\\\\\\\\").replace('"', "\\\\\"")
+        )
+    };
+    std::fs::write(cfg, json)
 }
 
 fn push_if_exists(out: &mut Vec<String>, p: String) {
@@ -220,20 +283,7 @@ fn has_pkcs11_entrypoint(path: &str) -> bool {
     }
 }
 
-fn default_module_paths() -> Vec<String> {
-    // Explicit override wins.
-    if let Some(p) = env_module_override() {
-        let path = std::path::Path::new(&p);
-        if path.is_dir() {
-            let mut out = Vec::new();
-            scan_dir_for_pkcs11(path, 5, &mut out);
-            if !out.is_empty() {
-                return out;
-            }
-        }
-        return vec![p];
-    }
-
+fn discover_modules_impl() -> Vec<String> {
     let mut v = Vec::new();
 
     // Vendor-specific directories (deeper scan).
@@ -284,6 +334,40 @@ fn default_module_paths() -> Vec<String> {
         deduped.retain(|p| has_pkcs11_entrypoint(p));
     }
     deduped
+}
+
+fn default_module_paths() -> Vec<String> {
+    // Environment variable wins (automation).
+    if let Some(p) = env_module_override() {
+        let path = std::path::Path::new(&p);
+        if path.is_dir() {
+            let mut out = Vec::new();
+            scan_dir_for_pkcs11(path, 5, &mut out);
+            if !out.is_empty() {
+                return out;
+            }
+        }
+        return vec![p];
+    }
+    // User-configured module from the GUI (config.json).
+    if let Some(p) = configured_module_path() {
+        let path = std::path::Path::new(&p);
+        if path.is_dir() {
+            let mut out = Vec::new();
+            scan_dir_for_pkcs11(path, 5, &mut out);
+            if !out.is_empty() {
+                return out;
+            }
+        }
+        return vec![p];
+    }
+    discover_modules_impl()
+}
+
+/// Public alias used by the GUI module picker.
+#[allow(dead_code)]
+pub fn discover_modules() -> Vec<String> {
+    discover_modules_impl()
 }
 
 /// Human-readable metadata extracted from a DER certificate.
