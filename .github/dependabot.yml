@@ -6,18 +6,40 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
-      rust-crypto:
+      # The CMS stack must move as one unit: cms 0.2.x needs der 0.7, while
+      # der 0.8 / x509-cert 0.3 need cms 0.3 (still a release candidate).
+      # A partial bump puts two incompatible `der` versions into the graph
+      # and the CMS types stop matching ours.
+      rust-cms:
         patterns:
           - "cms"
           - "der"
           - "x509-cert"
           - "const-oid"
+      rust-crypto:
+        patterns:
           - "sha1"
           - "sha2"
       rust-token:
         patterns:
           - "cryptoki"
           - "x509-parser"
+    ignore:
+      # Keep the der family on the generation cms 0.2.x supports. These
+      # constraints can be lifted together once cms 0.3 is stable.
+      - dependency-name: "der"
+        versions: [">=0.8"]
+      - dependency-name: "x509-cert"
+        versions: [">=0.3"]
+      - dependency-name: "const-oid"
+        versions: [">=0.10"]
+      # egui/eframe are pinned by the fastframe crates (v0.14.0 -> egui
+      # 0.36.2). Bumping egui alone puts two egui versions in the graph and
+      # breaks every call into the fastframe API.
+      - dependency-name: "egui"
+        versions: [">=0.37"]
+      - dependency-name: "eframe"
+        versions: [">=0.37"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
