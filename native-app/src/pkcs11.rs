@@ -43,6 +43,8 @@ fn known_dll_names() -> &'static [&'static str] {
         "eps2003csp11.dll",
         "eps2003csp11_64.dll",
         "hyp2003csp11.dll",
+        "HYP2003csp11IND.dll",
+        "HYP2003csp11IND_s.dll",
         // AET / Rainbow / StarSign middleware
         "aetpkss1.dll",
         "aetpksse.dll",
@@ -168,8 +170,10 @@ fn scan_dir_for_pkcs11(root: &std::path::Path, depth: usize, out: &mut Vec<Strin
                 let known = known_dll_names()
                     .iter()
                     .any(|k| k.eq_ignore_ascii_case(name));
-                let pattern =
-                    lower.contains("pkcs") || lower.contains("cryptoki") || lower.contains("token");
+                let pattern = lower.contains("pkcs")
+                    || lower.contains("cryptoki")
+                    || lower.contains("token")
+                    || lower.contains("csp11");
                 if known || pattern {
                     let ps = path.to_string_lossy().to_string();
                     if !out.iter().any(|x| x.eq_ignore_ascii_case(&ps)) {

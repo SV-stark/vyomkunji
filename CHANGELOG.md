@@ -43,6 +43,11 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.1] — 2026-10-21
+
+### Fixed
+- **HYP2003 (HyperPKI) token detection**: added `HYP2003csp11IND.dll` (and the `_s` variant) to the PKCS#11 module name list and the directory-scan pattern (`csp11`), so HyperPKI HYP2003 tokens are auto-detected on Windows.
+
 ## [0.2.0] — 2026-10-21
 
 ### Added

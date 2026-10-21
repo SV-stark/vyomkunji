@@ -954,7 +954,7 @@ impl App {
                 );
             }
             ui.label(
-                egui::RichText::new("VyomKunji 0.2.0")
+                egui::RichText::new("VyomKunji 0.2.1")
                     .font(Weight::Regular.font_id(10.0))
                     .color(text_faint()),
             );
