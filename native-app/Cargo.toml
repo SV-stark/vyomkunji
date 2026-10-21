@@ -41,7 +41,7 @@ eframe = { version = "0.36.2", default-features = false, features = [
     "wayland",
     "x11",
 ] }
-egui = "0.36.2"
+egui = "0.37.0"
 
 # fastframe: the shared foundation behind ZapFast/Spotifast (MIT, git tag).
 fastframe-text = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
