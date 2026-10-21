@@ -150,6 +150,15 @@ fn known_dll_names() -> &'static [&'static str] {
         "cryptoida_pkcs11_f2.dll",
         "cryptoida_pkcs11_f3.dll",
         "cryptoid_pkcs11.dll",
+        // SafeSign / AET / G&D (StarSign, StarCos)
+        "aetpkss1.dll",
+        "aetpksse.dll",
+        "aetpkssw.dll",
+        "safesignpkcs11.dll",
+        "safesign.dll",
+        // Precision InnaIT
+        "innaitpkcs11.dll",
+        "precisionpkcs11.dll",
         // Indian CA branded guesses (vendors frequently rebrand SafeNet/OpenSC)
         "capricornpkcs11.dll",
         "pantasignpkcs11.dll",
@@ -204,6 +213,18 @@ fn known_vendor_directories() -> Vec<String> {
     // InnaIT
     push(&mut dirs, r"C:\Program Files\InnaIT");
     push(&mut dirs, r"C:\Program Files (x86)\InnaIT");
+    push(&mut dirs, r"C:\Program Files\Precision");
+    push(&mut dirs, r"C:\Program Files (x86)\Precision");
+
+    // SafeSign / AET / G&D (StarSign, StarCos)
+    push(&mut dirs, r"C:\Program Files\A.E.T");
+    push(&mut dirs, r"C:\Program Files (x86)\A.E.T");
+    push(&mut dirs, r"C:\Program Files\SafeSign");
+    push(&mut dirs, r"C:\Program Files (x86)\SafeSign");
+    push(&mut dirs, r"C:\Program Files\Giesecke & Devrient");
+    push(&mut dirs, r"C:\Program Files (x86)\Giesecke & Devrient");
+    push(&mut dirs, r"C:\Program Files\G&D");
+    push(&mut dirs, r"C:\Program Files (x86)\G&D");
 
     // OpenSC
     push(&mut dirs, r"C:\Program Files\OpenSC Project");
@@ -241,7 +262,12 @@ fn scan_dir_for_pkcs11(root: &std::path::Path, depth: usize, out: &mut Vec<Strin
                 let pattern = lower.contains("pkcs")
                     || lower.contains("cryptoki")
                     || lower.contains("token")
-                    || lower.contains("csp11");
+                    || lower.contains("csp11")
+                    || lower.contains("safesign")
+                    || lower.contains("aet")
+                    || lower.contains("starcos")
+                    || lower.contains("inna")
+                    || lower.contains("precision");
                 if known || pattern {
                     let ps = path.to_string_lossy().to_string();
                     if !out.iter().any(|x| x.eq_ignore_ascii_case(&ps)) {
