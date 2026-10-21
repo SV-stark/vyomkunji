@@ -32,8 +32,14 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bridge state, recent log; no PINs, signatures, certificate bodies, or usernames), and
   `VYOMKUNJI_CRASH_LOG=1` optionally appends local panic details to
   `%LOCALAPPDATA%\VyomKunji\crash.log`.
-- **Firefox MV3 migration plan** (`docs/FIREFOX-MV3.md`): event-page model, manifest
-  translation, testing matrix, and rollback plan. Firefox continues to ship MV2.
+- **Firefox MV3 migration completed** (`docs/FIREFOX-MV3.md`): the Firefox add-on is now
+  Manifest V3 - host URLs moved to `host_permissions`, `browser_action` became
+  `action`, `web_accessible_resources` uses the object form, and the background
+  script runs as a Firefox **event page** (Firefox has no service-worker
+  background). The add-on id, the shared `src/` tree, and the host protocol are
+  unchanged; the MV2 manifest stays available in git history for rollback.
+  `web-ext lint` reports 0 errors/warnings, and the release workflow now
+  publishes a ready-to-sign `vyomkunji-firefox-<tag>.xpi`.
 - **Supply-chain checks**: `deny.toml`, Dependabot updates, SHA-pinned GitHub Actions,
   and a CI `cargo-deny` job scoped to the Windows target.
 - **Extension lifecycle tests**: Node tests for host probing, request correlation,
@@ -55,9 +61,12 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without the `cms` builder feature, removing the `rsa` crate and its Marvin advisory.
 - **Startup log rotation**: `%TEMP%\vyomkunji-startup.log` is capped at 1 MiB with one
   `.1` generation.
-- **Extension host probing**: background code probes `com.vyomkunji.host` first, then
+- **Extension background probing**: background code probes `com.vyomkunji.host` first, then
   `com.signer.host`, keeps one native port, and rejects in-flight requests cleanly when
   the host disconnects.
+- **Extension tests and checks**: `extension/tests/manifest.test.mjs` asserts the
+  Manifest V3 shape of both builds, `tools/check-extensions.ps1` re-checks the same
+  rules in PowerShell, and CI lints the Firefox add-on with `web-ext`.
 
 ### Fixed
 - Portal names are read from the top-level `portal` field sent by the content scripts.

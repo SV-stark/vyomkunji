@@ -7,7 +7,7 @@
 [![CI Status](https://github.com/SV-stark/vyomkunji/actions/workflows/ci.yml/badge.svg)](https://github.com/SV-stark/vyomkunji/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SV-stark/vyomkunji?color=green&include_prereleases)](https://github.com/SV-stark/vyomkunji/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)](https://github.com/SV-stark/vyomkunji/releases/latest)
-[![Browsers](https://img.shields.io/badge/Browsers-Chrome%20(MV3)%20%7C%20Firefox%20(MV2)-orange.svg)](https://github.com/SV-stark/vyomkunji/releases/latest)
+[![Browsers](https://img.shields.io/badge/Browsers-Chrome%20(MV3)%20%7C%20Firefox%20(MV3)-orange.svg)](https://github.com/SV-stark/vyomkunji/releases/latest)
 
 <p align="center">
   <b>No Java Runtime. No Vendor Token Drivers. No emSigner, emBridge, or CrisSigner.</b><br>
@@ -112,6 +112,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
    * **Mozilla Firefox**:
      1. Open `about:debugging#/runtime/this-firefox`.
      2. Click **Load Temporary Add-on** and select `manifest.json` from the extracted Firefox extension zip.
+     > The Firefox build is a Manifest V3 add-on (event-page background, Firefox 140+). Details and the rollback path are in [`docs/FIREFOX-MV3.md`](docs/FIREFOX-MV3.md).
 5. **Plug in your DSC Token and Launch `vyomkunji.exe`**:
    The application will detect your hardware token and display your digital certificates with their validity dates.
 
@@ -211,12 +212,12 @@ vyomkunji/
 │   └── workflows/           # GitHub Actions CI and Automated Release pipelines
 ├── docs/                    # Architectural specs, USAGE guide, and theme documentation
 │   ├── portal-integration/  # Per-portal reverse-engineering and payload notes
-│   ├── FIREFOX-MV3.md       # Firefox Manifest V3 migration plan (event page, rollback)
+│   ├── FIREFOX-MV3.md       # Firefox Manifest V3 migration (event page, validation, rollback)
 │   ├── THEME.md             # Customizing JSON color palettes
 │   └── USAGE.md             # Comprehensive portal-by-portal user manual
 ├── extension/               # Chrome Manifest V3 browser extension source
-│   └── tests/               # Node tests for the background native-messaging bridge
-├── extension-firefox/       # Firefox Manifest V2 companion extension source
+│   └── tests/               # Node tests for the background bridge and manifests
+├── extension-firefox/       # Firefox Manifest V3 companion extension source
 ├── native-app/              # Rust workspace (Rust 2024 edition)
 │   ├── src/
 │   │   ├── bin/gui.rs       # egui/fastframe desktop GUI and tray shell

@@ -1,12 +1,10 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "VyomKunji — India G2C Digital Signing",
   "version": "0.3.0",
   "description": "Unified digital signing on Indian government portals using your DSC token.",
-  "permissions": [
-    "nativeMessaging",
-    "storage",
-    "activeTab",
+  "permissions": ["nativeMessaging", "storage", "activeTab"],
+  "host_permissions": [
     "https://*.incometax.gov.in/*",
     "https://incometax.gov.in/*",
     "https://*.gst.gov.in/*",
@@ -41,11 +39,23 @@
       "run_at": "document_idle"
     }
   ],
-  "browser_action": {
+  "action": {
     "default_popup": "src/popup/popup.html",
     "default_title": "VyomKunji"
   },
-  "web_accessible_resources": ["src/content/interceptor-main.js"],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/content/interceptor-main.js"],
+      "matches": [
+        "https://*.incometax.gov.in/*", "https://incometax.gov.in/*",
+        "https://*.gst.gov.in/*", "https://gst.gov.in/*",
+        "https://*.mca.gov.in/*", "https://mca.gov.in/*",
+        "https://*.epfindia.gov.in/*", "https://epfindia.gov.in/*",
+        "https://*.tdscpc.gov.in/*", "https://tdscpc.gov.in/*",
+        "https://*.traces.gov.in/*", "https://traces.gov.in/*"
+      ]
+    }
+  ],
   "options_ui": {
     "page": "src/options/options.html",
     "open_in_tab": true
@@ -53,7 +63,10 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "vyomkunji-g2c@vyomkunji.local",
-      "strict_min_version": "115.0"
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   },
   "icons": {

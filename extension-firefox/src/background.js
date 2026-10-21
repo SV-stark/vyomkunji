@@ -1,4 +1,5 @@
-// background.js — native messaging bridge for Chrome MV3 and Firefox MV2.
+// background.js — native messaging bridge for Chrome MV3 (service worker)
+// and Firefox MV3 (event page).
 //
 // Responsibilities:
 //  * pick a working native host (new name first, legacy name as fallback),
@@ -6,6 +7,11 @@
 //  * correlate responses by request id,
 //  * fail every in-flight request on disconnect instead of hanging forever,
 //  * attach the real tab origin so the GUI can show it on the approval card.
+//
+// The script is deliberately free of DOM APIs so the same file runs as a
+// Chrome service worker and as a Firefox event page. Both browsers may
+// suspend the background context; the next request re-probes the host, and
+// a disconnect rejects every in-flight request instead of leaving it hanging.
 const NATIVE_HOST = "com.vyomkunji.host";
 const LEGACY_HOST = "com.signer.host";
 const REQUEST_TIMEOUT_MS = 120000;
@@ -118,7 +124,17 @@ async function sendNative(payload) {
     );
   }
 
-  const state = active && active.host === host ? active : openPort(host);
+  let state;
+  try {
+    state = active && active.host === host ? active : openPort(host);
+  } catch (e) {
+    // The host is not installed or the browser refused the connection.
+    activeHost = null;
+    return makeError(
+      "HOST_UNAVAILABLE",
+      "VyomKunji native host is not registered for this browser (" + String(e) + ")"
+    );
+  }
   active = state;
 
   return new Promise((resolve) => {

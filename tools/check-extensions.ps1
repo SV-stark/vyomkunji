@@ -18,6 +18,60 @@ foreach ($manifestPath in @(
   }
 }
 
+# Manifest V3 shape. Chrome runs the background script as a service worker,
+# Firefox runs the same script as an event page; both are Manifest V3.
+$chromeManifest = Get-Content (Join-Path $chromeRoot "manifest.json") -Raw | ConvertFrom-Json
+$firefoxManifest = Get-Content (Join-Path $firefoxRoot "manifest.json") -Raw | ConvertFrom-Json
+
+foreach ($pair in @(
+  @{ Name = "extension"; Manifest = $chromeManifest },
+  @{ Name = "extension-firefox"; Manifest = $firefoxManifest }
+)) {
+  $manifest = $pair.Manifest
+  $label = $pair.Name
+  if ($manifest.manifest_version -ne 3) {
+    $failures.Add("$label manifest_version is $($manifest.manifest_version), expected 3")
+  }
+  if ($null -eq $manifest.action) {
+    $failures.Add("$label has no MV3 action (browser_action is MV2-only)")
+  }
+  if ($null -eq $manifest.host_permissions -or $manifest.host_permissions.Count -eq 0) {
+    $failures.Add("$label has no host_permissions")
+  }
+  foreach ($permission in @($manifest.permissions)) {
+    if ($permission -match "://") {
+      $failures.Add("$label lists the host pattern $permission in permissions; it belongs in host_permissions")
+    }
+  }
+  foreach ($entry in @($manifest.web_accessible_resources)) {
+    if ($null -eq $entry.resources -or $null -eq $entry.matches) {
+      $failures.Add("$label web_accessible_resources must use the MV3 object form (resources + matches)")
+    }
+  }
+}
+
+if ($null -eq $chromeManifest.background.service_worker) {
+  $failures.Add("extension background must use the MV3 service_worker")
+}
+if ($null -ne $chromeManifest.background.scripts) {
+  $failures.Add("extension background must not declare MV2 scripts")
+}
+if ($null -eq $firefoxManifest.background.scripts -or $firefoxManifest.background.scripts.Count -eq 0) {
+  $failures.Add("extension-firefox background must declare the MV3 event page scripts")
+}
+if ($null -ne $firefoxManifest.background.service_worker) {
+  $failures.Add("extension-firefox must not use service_worker; Firefox runs an event page")
+}
+if ($null -eq $firefoxManifest.browser_specific_settings) {
+  $failures.Add("extension-firefox is missing browser_specific_settings")
+}
+if ($null -ne $firefoxManifest.key) {
+  $failures.Add("extension-firefox must not carry the Chrome signing key")
+}
+if ($chromeManifest.version -ne $firefoxManifest.version) {
+  $failures.Add("extension version $($chromeManifest.version) differs from extension-firefox $($firefoxManifest.version)")
+}
+
 # Every file under the shared src tree must be byte-identical. The manifests
 # and platform-specific packaging intentionally differ.
 $chromeSrc = Join-Path $chromeRoot "src"

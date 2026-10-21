@@ -69,15 +69,39 @@ jobs:
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME
-          Compress-Archive -Path "extension\*" -DestinationPath "vyomkunji-chrome-$tag.zip" -Force
+          # Stage only the files the store needs: the test harness and the
+          # package.json next to it must not ship.
+          $staging = "dist\vyomkunji-chrome"
+          Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item "extension\manifest.json" -Destination $staging
+          Copy-Item "extension\src" -Destination $staging -Recurse
+          Copy-Item "extension\icons" -Destination $staging -Recurse
+          Compress-Archive -Path "$staging\*" -DestinationPath "vyomkunji-chrome-$tag.zip" -Force
           Write-Host "Created vyomkunji-chrome-$tag.zip"
 
       - name: Package Firefox Extension
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME
-          Compress-Archive -Path "extension-firefox\*" -DestinationPath "vyomkunji-firefox-$tag.zip" -Force
+          $staging = "dist\vyomkunji-firefox-source"
+          Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item "extension-firefox\manifest.json" -Destination $staging
+          Copy-Item "extension-firefox\src" -Destination $staging -Recurse
+          Copy-Item "extension-firefox\icons" -Destination $staging -Recurse
+          Compress-Archive -Path "$staging\*" -DestinationPath "vyomkunji-firefox-$tag.zip" -Force
           Write-Host "Created vyomkunji-firefox-$tag.zip"
+
+      - name: Build Firefox XPI (Manifest V3 add-on package)
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          npx --yes web-ext@8.3.0 build --source-dir extension-firefox --artifacts-dir "dist" --overwrite-dest --filename "vyomkunji-firefox-$tag-mv3.zip"
+          $built = "dist\vyomkunji-firefox-$tag-mv3.zip"
+          if (-not (Test-Path $built)) { throw "web-ext did not produce a Firefox package" }
+          Move-Item $built "dist\vyomkunji-firefox-$tag.xpi" -Force
+          Write-Host "Created dist\vyomkunji-firefox-$tag.xpi"
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress
@@ -101,6 +125,7 @@ jobs:
           $artifacts = @()
           $artifacts += Get-ChildItem -Path . -Filter "vyomkunji-*.zip"
           $artifacts += Get-ChildItem -Path "dist" -Filter "vyomkunji-*-setup.exe"
+          $artifacts += Get-ChildItem -Path "dist" -Filter "vyomkunji-firefox-*.xpi"
           if ($artifacts.Count -eq 0) { throw "No release artifacts found" }
           $lines = foreach ($file in $artifacts) {
             $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -116,6 +141,7 @@ jobs:
             vyomkunji-*-windows-x64.zip
             vyomkunji-chrome-*.zip
             vyomkunji-firefox-*.zip
+            dist\vyomkunji-firefox-*.xpi
             SHA256SUMS.txt
             dist\vyomkunji-*-setup.exe
           generate_release_notes: true

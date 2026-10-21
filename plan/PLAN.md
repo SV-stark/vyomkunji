@@ -125,7 +125,7 @@ Other message types: `listTokens`, `selectCert`, `pin`, `status`, `ping`.
 - Audit log of all signing events (local, tamper-evident).
 
 ## 7. Tech Stack
-- Extension: JavaScript, Chrome MV3 + Firefox MV2, shared sources.
+- Extension: JavaScript, Chrome MV3 + Firefox MV3 (event page), shared sources.
 - Native app: Rust.
   - PKCS#11 via the `cryptoki` crate; PC/SC via the `pcsc` crate.
   - Crypto: on-token signing only; the private key never leaves the token.
@@ -138,7 +138,7 @@ Other message types: `listTokens`, `selectCert`, `pin`, `status`, `ping`.
 ## 8. Phases & Milestones
 - M0 (week 1-2): Plan + protocol + repo scaffold. ✅
 - M1 (week 3-4): Native host (native messaging) + token enumeration. ✅
-- M2 (week 5-6): Extension MV3/MV2 + incometax.gov.in content script + shim. ✅
+- M2 (week 5-6): Extension MV3 (Chrome service worker + Firefox event page) + incometax.gov.in content script + shim. ✅
 - M3 (week 7-8): Real PKCS#11 signing + cert picker + PIN. ✅ (PIN test pending)
 - M4 (week 9-10): End-to-end on IT portal (ITR signing) + tests. 🟡
 - M5 (week 11-12): Remote signing (phone approve) + audit log. 🟡
@@ -154,7 +154,7 @@ file, and the redesigned GUI.
 - `CHANGELOG.md` — release history.
 - `shared/protocol.md` — message schema.
 - `README.md`, `docs/USAGE.md`, `docs/THEME.md` — how to run, sign and theme it.
-- `extension/` (Chrome MV3), `extension-firefox/` (Firefox MV2).
+- `extension/` (Chrome MV3), `extension-firefox/` (Firefox MV3).
 - `native-app/` — Rust host, GUI, PKCS#11 layer and the localhost bridge.
 - `docs/portal-integration/incometax.md` — portal integration notes.
 

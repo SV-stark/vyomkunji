@@ -29,6 +29,10 @@ drivers, no emSigner/emBridge/CrisSigner.**
    - Chrome: `chrome://extensions` → Developer mode → Load unpacked → select `extension/`.
    - Firefox: `about:debugging` → This Firefox → Load Temporary Add-on → select
      `extension-firefox/manifest.json`.
+   - Both builds are Manifest V3. Chrome runs the background script as a service
+     worker, Firefox as an event page - the same shared sources serve both. The
+     Firefox add-on needs Firefox 140 or newer; see
+     [FIREFOX-MV3.md](FIREFOX-MV3.md) for the details and the rollback path.
 
 4. **Start the app and connect your token**
    ```powershell

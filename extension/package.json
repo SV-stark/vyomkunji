@@ -1,8 +1,8 @@
 {
   "name": "vyomkunji-extension",
   "private": true,
-  "description": "Tests for the VyomKunji browser extension",
+  "description": "Tests for the VyomKunji browser extension (Chrome MV3 + Firefox MV3)",
   "scripts": {
-    "test": "node --test tests/background.test.mjs"
+    "test": "node --test tests/background.test.mjs tests/manifest.test.mjs"
   }
 }

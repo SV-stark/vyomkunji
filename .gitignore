@@ -1,5 +1,7 @@
 /target
 native-app/target
+/dist
+/web-ext-artifacts
 *.exe
 *.png
 !extension/icons/*.png
