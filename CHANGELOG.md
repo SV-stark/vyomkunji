@@ -6,6 +6,39 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.1] - 2026-10-21
+
+Maintenance release: dependency updates and CI hardening only - no behaviour
+changes for users.
+
+### Changed
+- **`rand` 0.8 → 0.10**: the bridge session token is still 32 random bytes; the
+  call site was adapted to the new API (`rand::Rng`, `rand::rng()`).
+- **`base64` 0.22 → 0.23**, **`x509-parser` 0.16 → 0.18** (certificate metadata
+  parsing), **`tray-icon` 0.25 → 0.26** (tray item).
+- **`sha1` 0.10 → 0.11** and **`sha2` 0.10 → 0.11** (digest implementation).
+- **CMS stack kept on one `der` generation**: `der` 0.7, `x509-cert` 0.2,
+  `const-oid` 0.9 and `cms` 0.2.3 stay together, because `cms` 0.2.x needs
+  `der` 0.7 while `der` 0.8 / `x509-cert` 0.3 require `cms` 0.3 (still a release
+  candidate). Mixing the two produced two incompatible `der` versions and a
+  build failure.
+- **GitHub Actions updated**: `actions/checkout` 7.0.1, `actions/setup-node`
+  7.1.0, `softprops/action-gh-release` 3.0.3.
+
+### Fixed
+- **Dependabot guard rails**: the CMS stack is grouped and `der`/`x509-cert`/
+  `const-oid`/`egui`/`eframe` are pinned to the versions that build, so
+  Dependabot no longer proposes unbuildable upgrade sets.
+- **CI and release reliability**: the `web-ext` steps install the package once
+  with retries instead of fetching it per step, so a transient npm `ECONNRESET`
+  no longer fails a build or a release.
+
+### Known limitations
+- The `egui` 0.37 upgrade is still blocked upstream: `fastframe` v0.14.0 pins
+  `egui`/`eframe` 0.36.2, so the two versions cannot coexist in the graph.
+
+---
+
 ## [0.4.0] - 2026-10-21
 
 ### Added
