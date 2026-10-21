@@ -1,0 +1,51 @@
+# cargo-deny configuration for VyomKunji.
+# Checks are run by CI (.github/workflows/ci.yml) and locally with `cargo deny check`.
+
+[graph]
+# VyomKunji ships a Windows desktop app. Restricting the graph avoids reporting
+# Linux-only tray/D-Bus advisories that cannot be reached by the shipped binary.
+targets = ["x86_64-pc-windows-msvc"]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "warn"
+ignore = []
+
+[licenses]
+version = 2
+# The project is AGPL-3.0-only. Dependencies must be OSI-approved and
+# compatible; this list covers the RustCrypto, egui/eframe, and Windows stacks.
+allow = [
+  "0BSD",
+  "AGPL-3.0-only",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "OFL-1.1",
+  "Ubuntu-font-1.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+# The five fastframe crates are git dependencies pinned by tag in Cargo.toml
+# and by commit in Cargo.lock; they do not carry a registry version field.
+wildcards = "allow"
+deny = []
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+  "https://github.com/crmne/fastframe",
+]

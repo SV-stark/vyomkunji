@@ -1,12 +1,181 @@
 // PKCS#11 token access for DSC signing.
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use cryptoki::context::{CInitializeArgs, Pkcs11};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
 use cryptoki::mechanism::Mechanism;
 use cryptoki::object::{Attribute, AttributeType, CertificateType, KeyType, ObjectClass};
 use cryptoki::session::UserType;
 use cryptoki::types::AuthPin;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use sha1::Sha1;
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use std::path::Path;
+
+/// Digest algorithms understood by the host protocol. SHA-256 is the default;
+/// the others exist for portals that still require SHA-1 and for CAs that issue
+/// SHA-384/512 certificates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HashAlgorithm {
+    Sha1,
+    #[default]
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+impl HashAlgorithm {
+    pub fn parse(value: &str) -> Self {
+        match value
+            .trim()
+            .to_ascii_uppercase()
+            .replace(['-', '_'], "")
+            .as_str()
+        {
+            "SHA1" => Self::Sha1,
+            "SHA384" => Self::Sha384,
+            "SHA512" => Self::Sha512,
+            _ => Self::Sha256,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sha1 => "SHA1",
+            Self::Sha256 => "SHA256",
+            Self::Sha384 => "SHA384",
+            Self::Sha512 => "SHA512",
+        }
+    }
+
+    pub fn digest_len(self) -> usize {
+        match self {
+            Self::Sha1 => 20,
+            Self::Sha256 => 32,
+            Self::Sha384 => 48,
+            Self::Sha512 => 64,
+        }
+    }
+
+    pub fn digest(self, data: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Sha1 => Sha1::digest(data).to_vec(),
+            Self::Sha256 => Sha256::digest(data).to_vec(),
+            Self::Sha384 => Sha384::digest(data).to_vec(),
+            Self::Sha512 => Sha512::digest(data).to_vec(),
+        }
+    }
+
+    /// PKCS#1 v1.5 DigestInfo prefix for `Mechanism::RsaPkcs`.
+    fn digest_info_prefix(self) -> &'static [u8] {
+        match self {
+            Self::Sha1 => &[
+                0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04,
+                0x14,
+            ],
+            Self::Sha256 => &[
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x01, 0x05, 0x00, 0x04, 0x20,
+            ],
+            Self::Sha384 => &[
+                0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x02, 0x05, 0x00, 0x04, 0x30,
+            ],
+            Self::Sha512 => &[
+                0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x03, 0x05, 0x00, 0x04, 0x40,
+            ],
+        }
+    }
+
+    fn digest_info(self, digest: &[u8]) -> Vec<u8> {
+        let prefix = self.digest_info_prefix();
+        let mut out = Vec::with_capacity(prefix.len() + digest.len());
+        out.extend_from_slice(prefix);
+        out.extend_from_slice(digest);
+        out
+    }
+
+    fn rsa_mechanism(self) -> Mechanism<'static> {
+        match self {
+            Self::Sha1 => Mechanism::Sha1RsaPkcs,
+            Self::Sha256 => Mechanism::Sha256RsaPkcs,
+            Self::Sha384 => Mechanism::Sha384RsaPkcs,
+            Self::Sha512 => Mechanism::Sha512RsaPkcs,
+        }
+    }
+
+    fn ecdsa_mechanism(self) -> Mechanism<'static> {
+        match self {
+            Self::Sha1 => Mechanism::EcdsaSha1,
+            Self::Sha256 => Mechanism::EcdsaSha256,
+            Self::Sha384 => Mechanism::EcdsaSha384,
+            Self::Sha512 => Mechanism::EcdsaSha512,
+        }
+    }
+
+    fn rsa_name(self) -> &'static str {
+        match self {
+            Self::Sha1 => "SHA1_RSA_PKCS",
+            Self::Sha256 => "SHA256_RSA_PKCS",
+            Self::Sha384 => "SHA384_RSA_PKCS",
+            Self::Sha512 => "SHA512_RSA_PKCS",
+        }
+    }
+
+    fn ecdsa_name(self) -> &'static str {
+        match self {
+            Self::Sha1 => "ECDSA_SHA1",
+            Self::Sha256 => "ECDSA_SHA256",
+            Self::Sha384 => "ECDSA_SHA384",
+            Self::Sha512 => "ECDSA_SHA512",
+        }
+    }
+
+    pub(crate) fn oid(self) -> const_oid::ObjectIdentifier {
+        const_oid::ObjectIdentifier::new_unwrap(match self {
+            Self::Sha1 => "1.3.14.3.2.26",
+            Self::Sha256 => "2.16.840.1.101.3.4.2.1",
+            Self::Sha384 => "2.16.840.1.101.3.4.2.2",
+            Self::Sha512 => "2.16.840.1.101.3.4.2.3",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyKind {
+    Rsa,
+    Ec,
+}
+
+impl KeyKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Rsa => "RSA",
+            Self::Ec => "EC",
+        }
+    }
+}
+
+/// Options for a signing request. `sign()` keeps the historical SHA-256 /
+/// non-CMS behaviour; `sign_with()` exposes the negotiated algorithm and the
+/// detached CMS output.
+#[derive(Clone, Debug)]
+pub struct SignOptions<'a> {
+    pub cert_cn: Option<&'a str>,
+    pub already_hashed: bool,
+    pub hash: HashAlgorithm,
+    pub pkcs7: bool,
+}
+
+impl<'a> Default for SignOptions<'a> {
+    fn default() -> Self {
+        Self {
+            cert_cn: None,
+            already_hashed: false,
+            hash: HashAlgorithm::Sha256,
+            pkcs7: false,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct TokenManager {
@@ -689,6 +858,7 @@ pub fn discover_modules() -> Vec<String> {
 }
 
 /// Human-readable metadata extracted from a DER certificate.
+#[derive(Clone)]
 pub struct CertInfo {
     pub subject: String,
     pub cn: String,
@@ -778,7 +948,7 @@ impl TokenManager {
         // panic inside cryptoki-sys (GetProcAddress failures). Guard against that.
         let load = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let pk = Pkcs11::new(module_path).map_err(|e| e.to_string())?;
-            pk.initialize(CInitializeArgs::OsThreads)
+            pk.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
                 .map_err(|e| e.to_string())?;
             Ok::<_, String>(pk)
         }));
@@ -936,9 +1106,11 @@ impl TokenManager {
     }
 
     /// Sign `data` with the token's signing key. Optionally filter cert CN.
-    /// If `already_hashed` is true, expects a 32-byte SHA-256 digest (or 51-byte DigestInfo structure)
-    /// and signs with `Mechanism::RsaPkcs`.
-    /// If `already_hashed` is false, hashes with SHA-256 and signs with `Mechanism::Sha256RsaPkcs`.
+    /// If `already_hashed` is true, expects a digest of the selected hash
+    /// algorithm (or a 51-byte SHA-256 DigestInfo structure) and signs with
+    /// `Mechanism::RsaPkcs`.
+    /// If `already_hashed` is false, hashes and signs in one token operation.
+    #[allow(dead_code)]
     pub fn sign(
         &self,
         pin: &str,
@@ -946,16 +1118,40 @@ impl TokenManager {
         cert_cn_filter: Option<&str>,
         already_hashed: bool,
     ) -> Result<Value, String> {
+        self.sign_with(
+            pin,
+            data,
+            &SignOptions {
+                cert_cn: cert_cn_filter,
+                already_hashed,
+                ..SignOptions::default()
+            },
+        )
+    }
+
+    /// Signing entry point with explicit hash / CMS options.
+    pub fn sign_with(&self, pin: &str, data: &[u8], opts: &SignOptions) -> Result<Value, String> {
         let slots = self
             .pkcs11
             .get_slots_with_token()
             .map_err(|e| e.to_string())?;
+        if slots.is_empty() {
+            return Err("no token found".to_string());
+        }
         let mut last_err = "no token found".to_string();
         for slot in slots {
-            if let Ok(r) = self.sign_in_slot(slot, pin, data, cert_cn_filter, already_hashed) {
-                return Ok(r);
+            match self.sign_in_slot(slot, pin, data, opts) {
+                Ok(r) => return Ok(r),
+                Err(e) => {
+                    // A wrong PIN must not be retried on every slot: each retry
+                    // can advance the token's PIN retry counter.
+                    let lower = e.to_ascii_lowercase();
+                    if lower.contains("pin") || lower.contains("login failed") {
+                        return Err(e);
+                    }
+                    last_err = e;
+                }
             }
-            last_err = "signing failed in all tokens".to_string();
         }
         Err(last_err)
     }
@@ -965,33 +1161,33 @@ impl TokenManager {
         slot: cryptoki::slot::Slot,
         pin: &str,
         data: &[u8],
-        cert_cn_filter: Option<&str>,
-        already_hashed: bool,
+        opts: &SignOptions,
     ) -> Result<Value, String> {
         let session = self
             .pkcs11
             .open_ro_session(slot)
             .map_err(|e| e.to_string())?;
         session
-            .login(UserType::User, Some(&AuthPin::new(pin.to_string())))
+            .login(UserType::User, Some(&AuthPin::new(pin.into())))
             .map_err(|e| format!("login failed: {}", e))?;
 
-        // Find X.509 certs (to filter)
+        // Read every certificate first: the leaf is selected below and the
+        // remaining certificates are used to build the chain.
         let cert_template = vec![
             Attribute::Class(ObjectClass::CERTIFICATE),
             Attribute::CertificateType(CertificateType::X_509),
         ];
-        let certs = session
+        let cert_objects = session
             .find_objects(&cert_template)
             .map_err(|e| e.to_string())?;
 
-        let mut chosen_id: Option<Vec<u8>> = None;
-        let mut chosen_cn = String::new();
-        let mut chosen_der = Vec::new();
-        for c in &certs {
-            let attrs = session
-                .get_attributes(*c, &[AttributeType::Value, AttributeType::Id])
-                .map_err(|e| e.to_string())?;
+        let mut all: Vec<(Vec<u8>, Vec<u8>, CertInfo)> = Vec::new();
+        for c in &cert_objects {
+            let attrs = match session.get_attributes(*c, &[AttributeType::Value, AttributeType::Id])
+            {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
             let mut der = Vec::new();
             let mut id = Vec::new();
             for a in attrs {
@@ -1005,68 +1201,269 @@ impl TokenManager {
                 continue;
             }
             let info = Self::parse_cert(&der);
-            if let Some(filter) = cert_cn_filter {
-                if !info.cn.to_lowercase().contains(&filter.to_lowercase()) {
-                    continue;
-                }
-            }
-            chosen_id = Some(id);
-            chosen_cn = info.cn;
-            chosen_der = der;
-            break;
+            all.push((id, der, info));
         }
 
-        // Find private RSA key matching chosen cert id (or any signing key)
-        let mut key_template = vec![
+        let chosen_index = all
+            .iter()
+            .position(|(_, _, info)| {
+                opts.cert_cn
+                    .map(|filter| info.cn.to_lowercase().contains(&filter.to_lowercase()))
+                    .unwrap_or(true)
+            })
+            .ok_or_else(|| match opts.cert_cn {
+                Some(filter) => format!("no certificate matching '{}'", filter),
+                None => "no certificate found".to_string(),
+            })?;
+
+        let (chosen_id, chosen_der, chosen_info) = {
+            let (id, der, info) = &all[chosen_index];
+            (id.clone(), der.to_vec(), info.clone())
+        };
+        let kind = Self::key_kind(&chosen_der);
+        let chain = Self::certificate_chain(&chosen_der, &all);
+
+        // Find a private signing key matching the chosen certificate id. Some
+        // tokens do not expose CKA_ID on keys, so fall back to any signing key.
+        let key_template = vec![
             Attribute::Class(ObjectClass::PRIVATE_KEY),
-            Attribute::KeyType(KeyType::RSA),
+            Attribute::KeyType(match kind {
+                KeyKind::Rsa => KeyType::RSA,
+                KeyKind::Ec => KeyType::EC,
+            }),
             Attribute::Sign(true),
         ];
-        if let Some(ref id) = chosen_id {
-            key_template.push(Attribute::Id(id.clone()));
+        let mut keys = Vec::new();
+        if !chosen_id.is_empty() {
+            let mut with_id = key_template.clone();
+            with_id.push(Attribute::Id(chosen_id.clone()));
+            keys = session.find_objects(&with_id).map_err(|e| e.to_string())?;
         }
-        let keys = session
-            .find_objects(&key_template)
-            .map_err(|e| e.to_string())?;
+        if keys.is_empty() {
+            keys = session
+                .find_objects(&key_template)
+                .map_err(|e| e.to_string())?;
+        }
         let key = keys
             .into_iter()
             .next()
             .ok_or_else(|| "no private signing key found".to_string())?;
 
-        let (sig, mechanism_name) = if already_hashed {
-            // SHA-256 DigestInfo prefix (RFC 3447 / PKCS #1 v2.2):
-            // SEQUENCE { SEQUENCE { AlgorithmIdentifier sha-256, NULL }, OCTET STRING hash }
-            const SHA256_DIGEST_INFO_PREFIX: [u8; 19] = [
-                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
-                0x01, 0x05, 0x00, 0x04, 0x20,
-            ];
-            let payload_to_sign = if data.len() == 32 {
-                let mut v = Vec::with_capacity(51);
-                v.extend_from_slice(&SHA256_DIGEST_INFO_PREFIX);
-                v.extend_from_slice(data);
-                v
-            } else {
+        let mut response = json!({
+            "cert": B64.encode(&chosen_der),
+            "certId": B64.encode(&chosen_id),
+            "certCN": chosen_info.cn,
+            "hash": opts.hash.name(),
+            "keyType": kind.label(),
+        });
+
+        if opts.already_hashed {
+            let expected = opts.hash.digest_len();
+            let wrapped_len = opts.hash.digest_info_prefix().len() + expected;
+            let is_digest = data.len() == expected;
+            let is_digest_info = kind == KeyKind::Rsa
+                && data.len() == wrapped_len
+                && data.starts_with(opts.hash.digest_info_prefix());
+            if !is_digest && !is_digest_info {
+                let _ = session.logout();
+                return Err(format!(
+                    "alreadyHashed expects a {expected}-byte {} digest{}",
+                    opts.hash.name(),
+                    if kind == KeyKind::Rsa {
+                        format!(" or a {wrapped_len}-byte DigestInfo")
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
+        }
+
+        if opts.pkcs7 {
+            if opts.already_hashed && data.len() != opts.hash.digest_len() {
+                let _ = session.logout();
+                return Err(format!(
+                    "alreadyHashed with pkcs7 requires a {}-byte {} digest",
+                    opts.hash.digest_len(),
+                    opts.hash.name()
+                ));
+            }
+            let content_digest = if opts.already_hashed {
                 data.to_vec()
+            } else {
+                opts.hash.digest(data)
             };
-            let s = session
-                .sign(&Mechanism::RsaPkcs, key, &payload_to_sign)
-                .map_err(|e| format!("sign failed: {}", e))?;
-            (s, "RSA_PKCS")
-        } else {
-            let s = session
-                .sign(&Mechanism::Sha256RsaPkcs, key, data)
-                .map_err(|e| format!("sign failed: {}", e))?;
-            (s, "SHA256_RSA_PKCS")
+
+            let kind_for_signer = kind;
+            let hash = opts.hash;
+            let cms = crate::cms_sign::build_detached_cms(
+                &chosen_der,
+                &chain,
+                &content_digest,
+                hash,
+                kind,
+                |attrs_digest| match kind_for_signer {
+                    KeyKind::Rsa => {
+                        let payload = hash.digest_info(attrs_digest);
+                        session
+                            .sign(&Mechanism::RsaPkcs, key, &payload)
+                            .map_err(|e| format!("sign failed: {}", e))
+                    }
+                    KeyKind::Ec => session
+                        .sign(&Mechanism::Ecdsa, key, attrs_digest)
+                        .map_err(|e| format!("sign failed: {}", e)),
+                },
+            )
+            .inspect_err(|_| {
+                let _ = session.logout();
+            })?;
+
+            let _ = session.logout();
+            response["pkcs7"] = json!(B64.encode(&cms));
+            response["mechanism"] = json!(match kind {
+                KeyKind::Rsa => "RSA_PKCS_CMS",
+                KeyKind::Ec => "ECDSA_CMS",
+            });
+            response["chain"] = json!(chain.iter().map(|c| B64.encode(c)).collect::<Vec<_>>());
+            return Ok(response);
+        }
+
+        let (sig, mechanism_name) = match (kind, opts.already_hashed) {
+            (KeyKind::Rsa, true) => {
+                let payload = if data.len() == opts.hash.digest_len() {
+                    opts.hash.digest_info(data)
+                } else {
+                    data.to_vec()
+                };
+                let s = session
+                    .sign(&Mechanism::RsaPkcs, key, &payload)
+                    .map_err(|e| format!("sign failed: {}", e))?;
+                (s, "RSA_PKCS".to_string())
+            }
+            (KeyKind::Rsa, false) => {
+                let s = session
+                    .sign(&opts.hash.rsa_mechanism(), key, data)
+                    .map_err(|e| format!("sign failed: {}", e))?;
+                (s, opts.hash.rsa_name().to_string())
+            }
+            (KeyKind::Ec, true) => {
+                let s = session
+                    .sign(&Mechanism::Ecdsa, key, data)
+                    .map_err(|e| format!("sign failed: {}", e))?;
+                (s, "ECDSA".to_string())
+            }
+            (KeyKind::Ec, false) => {
+                let s = session
+                    .sign(&opts.hash.ecdsa_mechanism(), key, data)
+                    .map_err(|e| format!("sign failed: {}", e))?;
+                (s, opts.hash.ecdsa_name().to_string())
+            }
         };
 
         let _ = session.logout();
+        response["signature"] = json!(B64.encode(&sig));
+        response["mechanism"] = json!(mechanism_name);
+        Ok(response)
+    }
 
-        Ok(json!({
-            "signature": B64.encode(&sig),
-            "cert": B64.encode(&chosen_der),
-            "certId": B64.encode(chosen_id.unwrap_or_default()),
-            "certCN": chosen_cn,
-            "mechanism": mechanism_name,
-        }))
+    /// Determine whether the leaf certificate carries an RSA or EC public key.
+    fn key_kind(der: &[u8]) -> KeyKind {
+        use x509_parser::prelude::*;
+        match X509Certificate::from_der(der) {
+            Ok((_, cert)) => {
+                if cert.public_key().algorithm.algorithm.to_id_string() == "1.2.840.10045.2.1" {
+                    KeyKind::Ec
+                } else {
+                    KeyKind::Rsa
+                }
+            }
+            Err(_) => KeyKind::Rsa,
+        }
+    }
+
+    /// Build the issuer chain from certificates already present on the token.
+    /// The leaf is not included; the loop stops at a self-signed certificate or
+    /// when no issuer is available. Cycles are prevented by the `chain`
+    /// membership check.
+    fn certificate_chain(leaf_der: &[u8], all: &[(Vec<u8>, Vec<u8>, CertInfo)]) -> Vec<Vec<u8>> {
+        use x509_parser::prelude::*;
+        let mut chain: Vec<Vec<u8>> = Vec::new();
+        let mut current = leaf_der.to_vec();
+        while let Ok((_, cert)) = X509Certificate::from_der(&current) {
+            let issuer = cert.issuer().as_raw().to_vec();
+            if issuer == cert.subject().as_raw() {
+                break;
+            }
+            let next = all
+                .iter()
+                .map(|(_, der, _)| der)
+                .find(|der| {
+                    X509Certificate::from_der(der)
+                        .map(|(_, c)| c.subject().as_raw() == issuer.as_slice())
+                        .unwrap_or(false)
+                })
+                .cloned();
+            let Some(next) = next else { break };
+            if chain.iter().any(|c| c == &next) {
+                break;
+            }
+            chain.push(next.clone());
+            current = next;
+        }
+        chain
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_hash_algorithm_names() {
+        assert_eq!(HashAlgorithm::parse("sha-256"), HashAlgorithm::Sha256);
+        assert_eq!(HashAlgorithm::parse("SHA1"), HashAlgorithm::Sha1);
+        assert_eq!(HashAlgorithm::parse("SHA_384"), HashAlgorithm::Sha384);
+        assert_eq!(HashAlgorithm::parse("sha512"), HashAlgorithm::Sha512);
+        assert_eq!(HashAlgorithm::parse("unknown"), HashAlgorithm::Sha256);
+    }
+
+    #[test]
+    fn digest_lengths_match_the_algorithm() {
+        assert_eq!(HashAlgorithm::Sha1.digest(b"abc").len(), 20);
+        assert_eq!(HashAlgorithm::Sha256.digest(b"abc").len(), 32);
+        assert_eq!(HashAlgorithm::Sha384.digest(b"abc").len(), 48);
+        assert_eq!(HashAlgorithm::Sha512.digest(b"abc").len(), 64);
+    }
+
+    #[test]
+    fn sha256_matches_the_known_test_vector() {
+        let digest = HashAlgorithm::Sha256.digest(b"abc");
+        assert_eq!(
+            digest,
+            vec![
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+                0xf2, 0x00, 0x15, 0xad
+            ]
+        );
+    }
+
+    #[test]
+    fn digest_info_wraps_the_digest_with_the_right_prefix() {
+        for hash in [
+            HashAlgorithm::Sha1,
+            HashAlgorithm::Sha256,
+            HashAlgorithm::Sha384,
+            HashAlgorithm::Sha512,
+        ] {
+            let digest = vec![0xAA; hash.digest_len()];
+            let wrapped = hash.digest_info(&digest);
+            assert_eq!(
+                wrapped.len(),
+                hash.digest_info_prefix().len() + digest.len()
+            );
+            assert!(wrapped.starts_with(hash.digest_info_prefix()));
+            assert!(wrapped.ends_with(&digest));
+            assert_eq!(wrapped[0], 0x30, "DigestInfo must be a SEQUENCE");
+        }
     }
 }

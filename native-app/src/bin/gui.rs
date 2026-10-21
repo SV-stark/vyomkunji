@@ -3,6 +3,8 @@
 #![windows_subsystem = "windows"]
 #[path = "../bridge.rs"]
 mod bridge;
+#[path = "../cms_sign.rs"]
+mod cms_sign;
 #[path = "../icons.rs"]
 mod icons;
 #[path = "../pkcs11.rs"]
@@ -12,7 +14,7 @@ mod theme;
 #[path = "../timeutil.rs"]
 mod timeutil;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use eframe::egui;
 use fastframe_fonts::Weight;
 use fastframe_shell::{Closed, Headless, Resident};
@@ -20,7 +22,6 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem as TiMenuItem, PredefinedMenuIte
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use pkcs11::TokenManager;
-use sha2::{Digest, Sha256};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 use theme::{accent, accent2, border, card, card_hi, err, ok, text, text_dim, text_faint, warn};
@@ -37,10 +38,19 @@ fn startup_log(message: &str) {
     }
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let start = START.get_or_init(Instant::now);
+    let path = std::env::temp_dir().join("vyomkunji-startup.log");
+    // Keep the startup log bounded: one rotated generation, 1 MiB each.
+    if let Ok(meta) = std::fs::metadata(&path)
+        && meta.len() > 1024 * 1024
+    {
+        let rotated = std::env::temp_dir().join("vyomkunji-startup.log.1");
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(&path, rotated);
+    }
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(std::env::temp_dir().join("vyomkunji-startup.log"))
+        .open(path)
     {
         let _ = writeln!(
             file,
@@ -62,7 +72,7 @@ struct CertRow {
     id: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Level {
     Info,
     Ok,
@@ -89,13 +99,43 @@ struct LogEntry {
 
 struct Pending {
     portal: String,
+    /// Browser origin/tab URL supplied by the extension. Empty for local
+    /// (non-browser) requests.
+    origin: String,
     bytes: usize,
     hash_hex: String,
     received: String,
     cert_cn: Option<String>,
     already_hashed: bool,
+    hash: pkcs11::HashAlgorithm,
+    pkcs7: bool,
     data: Vec<u8>,
     resp: Sender<serde_json::Value>,
+}
+
+/// Origins the extension is allowed to run on. Used only to warn in the
+/// approval card; the browser extension still enforces the real boundary.
+fn origin_trusted(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("https://") else {
+        return false;
+    };
+    let host_port = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host_port
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(host_port)
+        .to_ascii_lowercase();
+    const SUFFIXES: &[&str] = &[
+        "incometax.gov.in",
+        "gst.gov.in",
+        "mca.gov.in",
+        "epfindia.gov.in",
+        "tdscpc.gov.in",
+        "traces.gov.in",
+    ];
+    SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{}", suffix)))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -302,10 +342,14 @@ impl App {
     fn new(waker: &fastframe_shell::Waker) -> Self {
         startup_log("App::new begin");
         let (tx, rx) = std::sync::mpsc::channel::<GuiRequest>();
-        let bridge_port = std::thread::spawn(move || bridge::serve_gui(tx).ok())
+        let bridge = std::thread::spawn(move || bridge::serve_gui(tx).ok())
             .join()
             .ok()
             .flatten();
+        let (bridge_port, _bridge_token) = match bridge {
+            Some((port, token)) => (Some(port), Some(token)),
+            None => (None, None),
+        };
 
         let configured = pkcs11::configured_module_path().unwrap_or_default();
         let mut app = Self {
@@ -366,10 +410,10 @@ impl App {
                 "quit" => Some(fastframe_tray::Event::Menu("quit")),
                 _ => None,
             };
-            if let Some(ev) = ev {
-                if tx_menu.send(ev).is_ok() {
-                    wake_menu.wake();
-                }
+            if let Some(ev) = ev
+                && tx_menu.send(ev).is_ok()
+            {
+                wake_menu.wake();
             }
         }));
         let tx_click = tx.clone();
@@ -380,10 +424,9 @@ impl App {
                 button_state: MouseButtonState::Up,
                 ..
             } = event
+                && tx_click.send(fastframe_tray::Event::Show).is_ok()
             {
-                if tx_click.send(fastframe_tray::Event::Show).is_ok() {
-                    wake_click.wake();
-                }
+                wake_click.wake();
             }
         }));
 
@@ -678,6 +721,20 @@ impl App {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown portal")
             .to_string();
+        // The background script attaches the real tab URL. Treat anything else
+        // as a local request and show it as such in the approval card.
+        let origin = req
+            .get("origin")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                req.get("payload")
+                    .and_then(|p| p.get("origin"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("")
+            .chars()
+            .take(512)
+            .collect::<String>();
         let payload = req.get("payload");
         let data_b64 = payload
             .and_then(|p| p.get("data"))
@@ -688,17 +745,34 @@ impl App {
             .and_then(|p| p.get("alreadyHashed"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let hash_hex = if already_hashed && bytes.len() == 32 {
+        let hash = pkcs11::HashAlgorithm::parse(
+            payload
+                .and_then(|p| p.get("hashAlg"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("SHA256"),
+        );
+        let pkcs7 = payload
+            .and_then(|p| p.get("pkcs7"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let hash_hex = if already_hashed && bytes.len() == hash.digest_len() {
             hex(&bytes)
         } else {
-            hex(&Sha256::digest(&bytes))
+            hex(&hash.digest(&bytes))
         };
         let cert_cn = payload
             .and_then(|p| p.get("certCN"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        self.push_log(Level::Warn, format!("Request received from {}", portal));
+        self.push_log(
+            Level::Warn,
+            if origin.is_empty() {
+                format!("Request received from {}", portal)
+            } else {
+                format!("Request received from {} ({})", portal, origin)
+            },
+        );
         self.history
             .insert(0, format!("{}  ·  {}", now_clock(), portal));
         if self.history.len() > 50 {
@@ -715,11 +789,14 @@ impl App {
 
         self.pending = Some(Pending {
             portal: portal.clone(),
+            origin,
             bytes: bytes.len(),
             hash_hex,
             received: now_clock(),
             cert_cn,
             already_hashed,
+            hash,
+            pkcs7,
             data: bytes,
             resp,
         });
@@ -755,11 +832,15 @@ impl App {
             }
         };
         let data = pending.data.clone();
-        match tm.sign(
+        match tm.sign_with(
             &self.pin,
             &data,
-            pending.cert_cn.as_deref(),
-            pending.already_hashed,
+            &pkcs11::SignOptions {
+                cert_cn: pending.cert_cn.as_deref(),
+                already_hashed: pending.already_hashed,
+                hash: pending.hash,
+                pkcs7: pending.pkcs7,
+            },
         ) {
             Ok(r) => {
                 let sig = r["signature"].as_str().unwrap_or("").to_string();
@@ -767,14 +848,20 @@ impl App {
                 let cn = r["certCN"].as_str().unwrap_or("").to_string();
                 self.signature = sig.clone();
                 self.signature_cn = cn.clone();
-                let _ = pending.resp.send(serde_json::json!({
+                let mut response = serde_json::json!({
                     "ok": true,
                     "signature": sig,
                     "cert": cert,
                     "certId": r["certId"],
                     "certCN": cn,
                     "signedAt": now_iso(),
-                }));
+                });
+                for key in ["pkcs7", "chain", "mechanism", "hash", "keyType"] {
+                    if let Some(value) = r.get(key) {
+                        response[key] = value.clone();
+                    }
+                }
+                let _ = pending.resp.send(response);
                 self.set_status(
                     Level::Ok,
                     format!("Approved & signed for {}", pending.portal),
@@ -888,6 +975,9 @@ impl Resident for App {
 
     fn shutdown(&mut self) {
         self.push_log(Level::Info, "VyomKunji stopped".to_string());
+        if let Some(port) = self.bridge_port {
+            bridge::clear_endpoint_if_port(port);
+        }
     }
 }
 
@@ -1204,15 +1294,18 @@ impl App {
         let info = self.pending.as_ref().map(|p| {
             (
                 p.portal.clone(),
+                p.origin.clone(),
                 p.bytes,
                 p.hash_hex.clone(),
                 p.received.clone(),
                 p.cert_cn.clone(),
+                p.hash.name().to_string(),
+                p.pkcs7,
             )
         });
 
         match info {
-            Some((portal, bytes, hash_hex, received, cert_cn)) => {
+            Some((portal, origin, bytes, hash_hex, received, cert_cn, hash_name, pkcs7)) => {
                 theme::card_frame(None).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -1248,8 +1341,33 @@ impl App {
                                     .color(text()),
                             );
                             ui.end_row();
+                            ui.label(egui::RichText::new("Origin").color(text_faint()).size(12.0));
+                            if origin.is_empty() {
+                                ui.label(
+                                    egui::RichText::new("Local request")
+                                        .size(12.5)
+                                        .color(warn()),
+                                );
+                            } else {
+                                let trusted = origin_trusted(&origin);
+                                ui.label(
+                                    egui::RichText::new(if trusted {
+                                        origin.clone()
+                                    } else {
+                                        format!("{} (unverified)", origin)
+                                    })
+                                    .family(egui::FontFamily::Monospace)
+                                    .size(11.0)
+                                    .color(if trusted {
+                                        text_dim()
+                                    } else {
+                                        err()
+                                    }),
+                                );
+                            }
+                            ui.end_row();
                             ui.label(
-                                egui::RichText::new("SHA-256")
+                                egui::RichText::new(&hash_name)
                                     .color(text_faint())
                                     .size(12.0),
                             );
@@ -1258,6 +1376,17 @@ impl App {
                                     .family(egui::FontFamily::Monospace)
                                     .size(11.0)
                                     .color(text_dim()),
+                            );
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Output").color(text_faint()).size(12.0));
+                            ui.label(
+                                egui::RichText::new(if pkcs7 {
+                                    "Detached PKCS#7 (CMS) with chain"
+                                } else {
+                                    "Raw token signature"
+                                })
+                                .size(12.5)
+                                .color(text()),
                             );
                             ui.end_row();
                             ui.label(
@@ -1643,6 +1772,61 @@ impl App {
         }
     }
 
+    /// Build a privacy-conscious diagnostics blob for support requests. It
+    /// deliberately excludes PINs, signatures, payload bytes, and certificate
+    /// bodies; only versions, module paths, token metadata, and recent log text
+    /// are included.
+    fn diagnostics_text(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!("VyomKunji {}\n", env!("CARGO_PKG_VERSION")));
+        out.push_str(&format!(
+            "OS: {} / {}\n",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ));
+        out.push_str(&format!(
+            "Module: {}\n",
+            self.manager
+                .as_ref()
+                .map(|(m, _)| m.as_str())
+                .unwrap_or("(none)")
+        ));
+        out.push_str(&format!(
+            "Browser bridge port: {}\n",
+            self.bridge_port
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "(not listening)".to_string())
+        ));
+        out.push_str(&format!("Certificates: {}\n", self.certs.len()));
+        if let Some(cert) = self.certs.first() {
+            out.push_str(&format!("Token: {}\n", cert.token_label));
+        }
+        out.push_str(&format!("Pending request: {}\n", self.pending.is_some()));
+        out.push_str(&format!(
+            "Status: {:?} — {}\n",
+            self.status_level, self.status
+        ));
+        out.push_str("\nRecent log:\n");
+        for entry in self.log.iter().rev().take(50) {
+            out.push_str(&format!("{}  {}\n", entry.time, entry.text));
+        }
+        // Keep local usernames out of the copied text even when a custom PKCS#11
+        // module path happens to live under the user profile.
+        for (variable, placeholder) in [
+            ("USERPROFILE", "%USERPROFILE%"),
+            ("LOCALAPPDATA", "%LOCALAPPDATA%"),
+            ("APPDATA", "%APPDATA%"),
+        ] {
+            if let Some(value) = std::env::var_os(variable) {
+                let value = value.to_string_lossy();
+                if !value.is_empty() {
+                    out = out.replace(value.as_ref(), placeholder);
+                }
+            }
+        }
+        out
+    }
+
     fn view_settings(&mut self, ui: &mut egui::Ui) {
         self.view_header(ui);
 
@@ -1722,6 +1906,23 @@ impl App {
             } else {
                 kv(ui, "Active module", "(none)", false);
             }
+
+            ui.add_space(14.0);
+            if ui.button("Copy diagnostics").clicked() {
+                let text = self.diagnostics_text();
+                ui.ctx().copy_text(text);
+                self.set_status(
+                    Level::Ok,
+                    "Diagnostics copied to clipboard".to_string(),
+                );
+            }
+            ui.label(
+                egui::RichText::new(
+                    "Includes version, token metadata, and the last 50 log lines. Never includes your PIN or signatures.",
+                )
+                .size(11.0)
+                .color(text_faint()),
+            );
 
             ui.add_space(14.0);
             if ui.button("Quit VyomKunji").clicked() {
@@ -1818,7 +2019,52 @@ fn native_options() -> eframe::NativeOptions {
     }
 }
 
+/// Opt-in local crash log. Set `VYOMKUNJI_CRASH_LOG=1` to append panic details
+/// to `%LOCALAPPDATA%\VyomKunji\crash.log` (falling back to the temp folder).
+/// Nothing is transmitted anywhere; the file is only for local diagnosis.
+fn install_crash_hook() {
+    if std::env::var_os("VYOMKUNJI_CRASH_LOG").is_none() {
+        return;
+    }
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut root = std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        root.push("VyomKunji");
+        let _ = std::fs::create_dir_all(&root);
+        let path = root.join("crash.log");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "(unknown location)".to_string());
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "(non-string panic payload)".to_string());
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "[{timestamp}] panic at {location}: {message}");
+            if std::env::var_os("RUST_BACKTRACE").is_some() {
+                let _ = writeln!(file, "{}", std::backtrace::Backtrace::force_capture());
+            }
+        }
+        previous(info);
+    }));
+}
+
 fn main() -> Result<(), eframe::Error> {
+    install_crash_hook();
     startup_log("main() entered");
     let waker = fastframe_shell::Waker::default();
     let app = App::new(&waker);

@@ -1,0 +1,8 @@
+{
+  "name": "vyomkunji-extension",
+  "private": true,
+  "description": "Tests for the VyomKunji browser extension",
+  "scripts": {
+    "test": "node --test tests/background.test.mjs"
+  }
+}

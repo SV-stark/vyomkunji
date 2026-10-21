@@ -1,8 +1,9 @@
 mod bridge;
+mod cms_sign;
 mod pkcs11;
 mod timeutil;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use pkcs11::TokenManager;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,10 +17,16 @@ struct Req {
     #[serde(rename = "type")]
     rtype: String,
     #[serde(default)]
+    portal: Option<String>,
+    /// Real tab URL supplied by the extension background script. Browser
+    /// requests always carry this at the top level.
+    #[serde(default)]
+    origin: Option<String>,
+    #[serde(default)]
     payload: Option<Value>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 struct Resp {
     id: String,
     ok: bool,
@@ -41,6 +48,28 @@ struct Resp {
     signed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<Value>,
+    /// Extra fields (pkcs7, chain, mechanism, hash, keyType, ...) are forwarded
+    /// without forcing every call site to know about them.
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Value>,
+}
+
+/// Copy optional signing metadata from a GUI/direct-token response into the
+/// protocol response.
+fn copy_signing_metadata(out: &mut Resp, source: &Value) {
+    for key in [
+        "pkcs7",
+        "chain",
+        "mechanism",
+        "hash",
+        "keyType",
+        "certId",
+        "certCN",
+    ] {
+        if let Some(value) = source.get(key) {
+            out.extra.insert(key.to_string(), value.clone());
+        }
+    }
 }
 
 fn read_msg() -> Option<String> {
@@ -82,17 +111,10 @@ fn main() {
                     &serde_json::to_string(&Resp {
                         id: "".to_string(),
                         ok: false,
-                        version: None,
-                        module: None,
-                        token_connected: None,
-                        cert_selected: None,
-                        tokens: None,
-                        signature: None,
-                        cert: None,
-                        signed_at: None,
                         error: Some(
                             serde_json::json!({"code":"BAD_REQUEST","message":e.to_string()}),
                         ),
+                        ..Default::default()
                     })
                     .unwrap(),
                 );
@@ -109,30 +131,16 @@ fn handle(req: &Req, mock: bool) -> Resp {
     let err = |code: &str, message: String| Resp {
         id: req.id.clone(),
         ok: false,
-        version: None,
-        module: None,
-        token_connected: None,
-        cert_selected: None,
-        tokens: None,
-        signature: None,
-        cert: None,
-        signed_at: None,
         error: Some(serde_json::json!({"code":code,"message":message})),
+        ..Default::default()
     };
 
     if req.rtype == "ping" {
         return Resp {
             id: req.id.clone(),
             ok: true,
-            version: Some("0.3.0".to_string()),
-            module: None,
-            token_connected: None,
-            cert_selected: None,
-            tokens: None,
-            signature: None,
-            cert: None,
-            signed_at: None,
-            error: None,
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            ..Default::default()
         };
     }
 
@@ -155,15 +163,10 @@ fn handle(req: &Req, mock: bool) -> Resp {
             Resp {
                 id: req.id.clone(),
                 ok: true,
-                version: None,
                 module: Some(module),
                 token_connected: Some(true),
                 cert_selected: Some(cert_selected),
-                tokens: None,
-                signature: None,
-                cert: None,
-                signed_at: None,
-                error: None,
+                ..Default::default()
             }
         }
         "listTokens" => {
@@ -174,15 +177,10 @@ fn handle(req: &Req, mock: bool) -> Resp {
             Resp {
                 id: req.id.clone(),
                 ok: true,
-                version: None,
                 module: Some(module),
                 token_connected: Some(true),
-                cert_selected: None,
                 tokens: Some(tokens),
-                signature: None,
-                cert: None,
-                signed_at: None,
-                error: None,
+                ..Default::default()
             }
         }
         "sign" => {
@@ -194,34 +192,63 @@ fn handle(req: &Req, mock: bool) -> Resp {
             };
             let pin = payload.get("pin").and_then(|v| v.as_str()).unwrap_or("");
             let cn = payload.get("certCN").and_then(|v| v.as_str());
-            let portal = payload
-                .get("portal")
-                .and_then(|v| v.as_str())
+            let portal = req
+                .portal
+                .as_deref()
+                .or_else(|| payload.get("portal").and_then(|v| v.as_str()))
                 .unwrap_or("portal");
             let already_hashed = payload
                 .get("alreadyHashed")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let hash = pkcs11::HashAlgorithm::parse(
+                payload
+                    .get("hashAlg")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("SHA256"),
+            );
+            let pkcs7 = payload
+                .get("pkcs7")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let origin = req
+                .origin
+                .as_deref()
+                .or_else(|| payload.get("origin").and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .chars()
+                .take(512)
+                .collect::<String>();
 
             // Preferred: route to the GUI for user approval + PIN entry.
             let gui_req = serde_json::json!({
                 "portal": portal,
+                "origin": origin,
                 "payload": {
                     "data": data_b64,
                     "certCN": cn,
-                    "alreadyHashed": already_hashed
+                    "alreadyHashed": already_hashed,
+                    "hashAlg": hash.name(),
+                    "pkcs7": pkcs7
                 }
             });
             if let Some(resp) = bridge::request_gui(&gui_req, Duration::from_secs(120)) {
                 if resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    return Resp {
+                    // Responses without a signature are status/approval errors
+                    // even if ok=true; keep the protocol honest.
+                    if resp.get("signature").and_then(|v| v.as_str()).is_none()
+                        && resp.get("pkcs7").and_then(|v| v.as_str()).is_none()
+                    {
+                        return err(
+                            "SIGN_FAILED",
+                            "GUI returned no signature material".to_string(),
+                        );
+                    }
+                    let mut out = Resp {
                         id: req.id.clone(),
                         ok: true,
-                        version: None,
-                        module: None,
                         token_connected: Some(true),
                         cert_selected: Some(true),
-                        tokens: None,
                         signature: resp
                             .get("signature")
                             .and_then(|v| v.as_str())
@@ -236,8 +263,10 @@ fn handle(req: &Req, mock: bool) -> Resp {
                                 .unwrap_or("")
                                 .to_string(),
                         ),
-                        error: None,
+                        ..Default::default()
                     };
+                    copy_signing_metadata(&mut out, &resp);
+                    return out;
                 } else {
                     return err(
                         resp.get("error")
@@ -253,37 +282,56 @@ fn handle(req: &Req, mock: bool) -> Resp {
                 }
             }
 
-            // Fallback: sign directly (requires PIN in the request).
+            // Fallback: sign directly only for local/headless callers that
+            // explicitly opt in. A browser-originated request must always go
+            // through the GUI approval path, even if it carries a PIN.
             if pin.is_empty() {
                 return err(
                     "PIN_REQUIRED",
                     "GUI not running and no PIN provided".to_string(),
                 );
             }
+            let allow_headless = std::env::var("VYOMKUNJI_ALLOW_HEADLESS_PIN")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !allow_headless || !origin.is_empty() {
+                return err(
+                    "GUI_UNAVAILABLE",
+                    "GUI is not running; direct PIN signing is disabled".to_string(),
+                );
+            }
             let (module, tm, _tokens) = match TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
                 Ok(v) => v,
                 Err(e) => return err("NO_PKCS11_MODULE", e),
             };
-            match tm.sign(pin, &bytes, cn, already_hashed) {
-                Ok(r) => Resp {
-                    id: req.id.clone(),
-                    ok: true,
-                    version: None,
-                    module: Some(module),
-                    token_connected: Some(true),
-                    cert_selected: Some(true),
-                    tokens: None,
-                    signature: r
-                        .get("signature")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    cert: r
-                        .get("cert")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    signed_at: Some(now_iso()),
-                    error: None,
-                },
+            let opts = pkcs11::SignOptions {
+                cert_cn: cn,
+                already_hashed,
+                hash,
+                pkcs7,
+            };
+            match tm.sign_with(pin, &bytes, &opts) {
+                Ok(r) => {
+                    let mut out = Resp {
+                        id: req.id.clone(),
+                        ok: true,
+                        module: Some(module),
+                        token_connected: Some(true),
+                        cert_selected: Some(true),
+                        signature: r
+                            .get("signature")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        cert: r
+                            .get("cert")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        signed_at: Some(now_iso()),
+                        ..Default::default()
+                    };
+                    copy_signing_metadata(&mut out, &r);
+                    out
+                }
                 Err(e) => err("SIGN_FAILED", e),
             }
         }
@@ -297,32 +345,99 @@ fn handle_mock(req: &Req, err: impl Fn(&str, String) -> Resp) -> Resp {
         "status" => Resp {
             id: req.id.clone(),
             ok: true,
-            version: None,
             module: Some("mock".to_string()),
             token_connected: Some(true),
             cert_selected: Some(true),
-            tokens: None,
-            signature: None,
-            cert: None,
-            signed_at: None,
-            error: None,
+            ..Default::default()
         },
         "listTokens" => Resp {
             id: req.id.clone(),
             ok: true,
-            version: None,
             module: Some("mock".to_string()),
             token_connected: Some(true),
-            cert_selected: None,
             tokens: Some(serde_json::json!([{
                 "id":"mock-token-1","label":"Mock DSC Token","serial":"MOCK123",
                 "certs":[{"id":"mock-cert-1","subject":"CN=Mock Signer","cn":"Mock Signer"}]
             }])),
-            signature: None,
-            cert: None,
-            signed_at: None,
-            error: None,
+            ..Default::default()
         },
         _ => err("UNKNOWN_TYPE", format!("unknown type {}", req.rtype)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(rtype: &str, payload: Option<Value>) -> Req {
+        Req {
+            id: "test-id".to_string(),
+            rtype: rtype.to_string(),
+            portal: None,
+            origin: None,
+            payload,
+        }
+    }
+
+    #[test]
+    fn ping_reports_the_cargo_package_version() {
+        let response = handle(&request("ping", None), true);
+        assert!(response.ok);
+        assert_eq!(response.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn unknown_request_types_are_rejected() {
+        let response = handle(&request("definitely-not-real", None), true);
+        assert!(!response.ok);
+        let error = response.error.expect("error object");
+        assert_eq!(error["code"], "UNKNOWN_TYPE");
+    }
+
+    #[test]
+    fn mock_token_listing_is_stable() {
+        let response = handle(&request("listTokens", None), true);
+        assert!(response.ok);
+        let tokens = response.tokens.expect("tokens");
+        assert_eq!(tokens[0]["serial"], "MOCK123");
+    }
+
+    #[test]
+    fn top_level_portal_and_origin_are_parsed() {
+        let json = r#"{
+            "id": "id",
+            "type": "sign",
+            "portal": "GST",
+            "origin": "https://gst.gov.in/return",
+            "payload": { "data": "YWJj" }
+        }"#;
+        let request: Req = serde_json::from_str(json).expect("valid request");
+        assert_eq!(request.portal.as_deref(), Some("GST"));
+        assert_eq!(request.origin.as_deref(), Some("https://gst.gov.in/return"));
+    }
+
+    #[test]
+    fn signing_metadata_is_flattened_into_the_response() {
+        let mut response = Resp {
+            id: "id".to_string(),
+            ok: true,
+            ..Default::default()
+        };
+        let source = serde_json::json!({
+            "pkcs7": "Y21z",
+            "chain": ["Y2VydA=="],
+            "mechanism": "RSA_PKCS_CMS",
+            "hash": "SHA256",
+            "keyType": "RSA",
+            "certId": "aWQ=",
+            "certCN": "Test Signer",
+            "ignored": "value"
+        });
+        copy_signing_metadata(&mut response, &source);
+        let value = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(value["pkcs7"], "Y21z");
+        assert_eq!(value["chain"][0], "Y2VydA==");
+        assert_eq!(value["hash"], "SHA256");
+        assert!(value.get("ignored").is_none());
     }
 }

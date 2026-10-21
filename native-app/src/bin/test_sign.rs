@@ -1,8 +1,11 @@
 // Dev self-test: reach the token, enumerate certs, and sign a test payload.
 // Run: cargo run --bin test_sign   (then enter the token PIN when prompted)
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+#![allow(dead_code)]
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use std::io::Write;
 
+#[path = "../cms_sign.rs"]
+mod cms_sign;
 #[path = "../pkcs11.rs"]
 mod pkcs11;
 

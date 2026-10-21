@@ -1,5 +1,5 @@
 #![allow(dead_code)] // helpers are shared across the host and GUI binaries
-                     // Small date/time helpers (no external crates).
+// Small date/time helpers (no external crates).
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn unix_secs() -> i64 {

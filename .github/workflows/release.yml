@@ -14,14 +14,27 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: native-app -> target
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: ./tools/check-version.ps1
 
       - name: Build Native Binaries (Release)
         working-directory: native-app
         run: cargo build --release
+
+      - name: Sign Native Binaries
+        shell: pwsh
+        run: ./tools/sign-windows.ps1 -Path "native-app\target\release\vyomkunji.exe", "native-app\target\release\vyomkunji-host.exe"
 
       - name: Package Native Application
         shell: pwsh
@@ -29,7 +42,7 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           $dist = "dist\vyomkunji-windows-x64"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
-          
+
           # Find binaries
           $binDir = if (Test-Path "native-app\target\release\vyomkunji.exe") {
             "native-app\target\release"
@@ -38,7 +51,7 @@ jobs:
           } else {
             throw "Could not locate compiled binaries"
           }
-          
+
           Copy-Item "$binDir\vyomkunji.exe" -Destination $dist
           Copy-Item "$binDir\vyomkunji-host.exe" -Destination $dist
           Copy-Item "native-app\install-host.ps1" -Destination $dist
@@ -48,7 +61,7 @@ jobs:
           Copy-Item "native-app\com.signer.host.firefox.json" -Destination $dist
           Copy-Item "LICENSE" -Destination $dist
           Copy-Item "README.md" -Destination $dist
-          
+
           Compress-Archive -Path "$dist\*" -DestinationPath "vyomkunji-$tag-windows-x64.zip" -Force
           Write-Host "Created vyomkunji-$tag-windows-x64.zip"
 
@@ -75,13 +88,35 @@ jobs:
           $env:Path = "C:\Program Files (x86)\Inno Setup 6;$env:Path"
           iscc installer\vyomkunji.iss
 
+      - name: Sign Windows Installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "dist\vyomkunji-*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer was not produced" }
+          ./tools/sign-windows.ps1 -Path $installer.FullName
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $artifacts = @()
+          $artifacts += Get-ChildItem -Path . -Filter "vyomkunji-*.zip"
+          $artifacts += Get-ChildItem -Path "dist" -Filter "vyomkunji-*-setup.exe"
+          if ($artifacts.Count -eq 0) { throw "No release artifacts found" }
+          $lines = foreach ($file in $artifacts) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          $lines | Set-Content -Path "SHA256SUMS.txt" -Encoding ascii
+          Get-Content "SHA256SUMS.txt"
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             vyomkunji-*-windows-x64.zip
             vyomkunji-chrome-*.zip
             vyomkunji-firefox-*.zip
+            SHA256SUMS.txt
             dist\vyomkunji-*-setup.exe
           generate_release_notes: true
           draft: false

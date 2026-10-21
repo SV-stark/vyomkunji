@@ -45,6 +45,9 @@
   // Bridge messages from the page's main-world interceptor to the background native host
   window.addEventListener("message", async (ev) => {
     if (!ev.data || ev.data.source !== "signer-page-request") return;
+    // Only accept messages from this page's own main world. Without this an
+    // embedded cross-origin frame could try to trigger a signing request.
+    if (ev.source !== window || ev.origin !== location.origin) return;
     const { id, body } = ev.data;
 
     let certCN = null;
@@ -59,9 +62,10 @@
       portal: PORTAL,
       payload: {
         data: body ? btoa(unescape(encodeURIComponent(body))) : "",
-        hashAlg: "SHA256",
-        signAlg: "RSA",
-        alreadyHashed: false,
+        hashAlg: (body && body.hashAlg) || "SHA256",
+        signAlg: (body && body.signAlg) || "RSA",
+        alreadyHashed: !!(body && body.alreadyHashed),
+        pkcs7: !!(body && (body.pkcs7 || body.includeChain)),
         certCN
       }
     };
@@ -72,6 +76,8 @@
       id: id,
       ok: !!(resp && resp.ok),
       signature: (resp && resp.signature) || "",
+      pkcs7: (resp && resp.pkcs7) || "",
+      chain: (resp && resp.chain) || [],
       cert: (resp && resp.cert) || "",
       error: resp && resp.error
     }, "*");

@@ -68,14 +68,16 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 │                 vyomkunji-host.exe                          │
 │         Browser Native Messaging Bridge                     │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ Localhost TCP Bridge (127.0.0.1, JSON-Lines)
+                  │ Localhost TCP Bridge (127.0.0.1, JSON-Lines, token-auth)
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    vyomkunji.exe                            │
 │  Desktop UI (egui 0.36 + fastframe resident tray shell)     │
-│   - Document Hash Preview (SHA-256)                         │
+│   - Payload Digest Preview (SHA-1 / 256 / 384 / 512)        │
+│   - Portal & Browser Origin Confirmation                    │
 │   - Token & Certificate Selection                           │
 │   - Secure PIN Entry Dialog                                 │
+│   - Raw Signature or Detached CMS/PKCS#7 Output             │
 └───────────────────────────┬─────────────────────────────────┘
                             │ PKCS#11 API (cryptoki)
                             ▼
@@ -83,7 +85,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 │              Hardware USB Token (FIPS / CC)                 │
 │         (Watchdata ProxKey, eMudhra, SafeScrypt)            │
 │                                                             │
-│   🔒 On-Chip C_Sign (RSA-2048 / PKCS#1 v1.5)               │
+│   🔒 On-Chip C_Sign (RSA PKCS#1 v1.5 / ECDSA)              │
 │   ⛔ Private Key NEVER leaves the token silicon              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -97,6 +99,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 1. **Download the latest release**:
    Download `vyomkunji-v0.3.0-windows-x64.zip` from [GitHub Releases](https://github.com/SV-stark/vyomkunji/releases/latest).
 2. **Extract the archive** to any folder on your computer (e.g. `C:\Program Files\VyomKunji` or your User folder).
+   > A one-click installer (`vyomkunji-<version>-setup.exe`) is published as well. It installs per-user or machine-wide, registers the native host for Chrome/Edge and Firefox, closes a running app before upgrading, and can add an optional "start at sign-in" entry.
 3. **Register the Native Host**:
    Open PowerShell in the extracted folder and run:
    ```powershell
@@ -117,9 +120,10 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 ### Option 2: Build From Source
 
 #### Prerequisites
-* [Rust toolchain](https://rustup.rs/) (stable channel, 1.75+)
+* [Rust toolchain](https://rustup.rs/) (stable channel, **1.98+** - the project uses the Rust 2024 edition; the minimum version is pinned as `rust-version` in `native-app/Cargo.toml`)
 * Windows 10/11 x64
 * PowerShell 5.1+ / 7+
+* Optional: [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) for the supply-chain checks
 
 #### Build Instructions
 ```bash
@@ -134,8 +138,19 @@ cargo clippy --all-targets -- -D warnings
 # Execute test suite
 cargo test
 
+# Supply-chain check (advisories, licenses, banned crates, sources)
+cargo deny check
+
 # Compile release binaries
 cargo build --release
+```
+
+From the repository root, the extension parity and versioning helpers can be run as well:
+```powershell
+powershell -File tools\sync-extensions.ps1     # Chrome -> Firefox shared sources
+powershell -File tools\check-extensions.ps1   # byte-level parity + manifest/JS checks
+powershell -File tools\check-version.ps1      # single-source version guard
+node --test extension/tests/background.test.mjs
 ```
 
 Compiled binaries will be generated in `target/release/`:
@@ -151,8 +166,12 @@ VyomKunji was designed from day one around **zero-trust and non-repudiation**:
 
 * **Hardware-Bound Private Keys**: All cryptographic signing operations are delegated directly to the physical token's secure element via PKCS#11 `C_Sign`. Private keys cannot be exported, extracted, or cloned.
 * **Ephemeral PIN Handling**: The token PIN is held exclusively in volatile memory for the duration of the signing session. It is never logged to disk, persisted, or transmitted over any network socket.
-* **Tamper-Evident SHA-256 Digest Inspection**: Before approving a signature, the desktop GUI calculates and presents the explicit SHA-256 hash of the payload and the originating portal URL for user consent.
+* **Authenticated Local Bridge**: The host talks to the desktop app over `127.0.0.1` using newline-delimited JSON, and every request must carry the per-session token from `%APPDATA%\VyomKunji\gui.token`. Unauthenticated requests are rejected.
+* **Tamper-Evident Digest Inspection**: Before approving a signature, the desktop GUI shows the payload digest (SHA-1/256/384/512), the portal name, and the browser tab URL that actually triggered the request, so the user can confirm the origin at a glance.
+* **Origin Pinning**: The extension always reports the browser-reported tab URL; a page cannot spoof the origin shown in the approval card. Cross-origin frames are ignored by the content scripts.
+* **Browser Requests Always Need Approval**: Direct host-side signing with a PIN is disabled by default and can only be enabled with `VYOMKUNJI_ALLOW_HEADLESS_PIN=1` for requests that carry no browser origin.
 * **Strict Native Messaging Boundaries**: The extension and native host communicate solely via OS-level stdin/stdout pipes restricted by explicit origin whitelists (`allowed_origins` and `allowed_extensions`).
+* **Privacy-Conscious Diagnostics**: The copyable diagnostics bundle contains versions, module and token metadata, and recent log lines - never PINs, signatures, certificate bodies, or your Windows username.
 * **Zero Cloud Dependence**: Everything executes strictly on your local machine. No external servers or telemetry services are contacted.
 
 ---
@@ -166,7 +185,20 @@ VyomKunji was designed from day one around **zero-trust and non-repudiation**:
 | `VYOMKUNJI_GUI_TEST_PIN` | Token PIN used for unattended automated testing | None (interactive prompt) |
 | `VYOMKUNJI_PIN_TIMEOUT_MIN` | Idle minutes before the in-memory PIN is cleared | `5` |
 | `VYOMKUNJI_MOCK` | Simulates a virtual token for UI development | Unset |
-| `VYOMKUNJI_STARTUP_LOG` | Appends startup timings to `%TEMP%\vyomkunji-startup.log` | Unset |
+| `VYOMKUNJI_STARTUP_LOG` | Appends startup timings to `%TEMP%\vyomkunji-startup.log` (rotated at 1 MiB) | Unset |
+| `VYOMKUNJI_CRASH_LOG` | Appends local panic details to `%LOCALAPPDATA%\VyomKunji\crash.log` | Unset |
+| `VYOMKUNJI_ALLOW_HEADLESS_PIN` | Allows the host to sign with a PIN **without** GUI approval - only for requests with no browser origin | Unset (GUI approval required) |
+
+---
+
+## 🧾 Signature Formats
+
+| Mode | Request field | Response |
+|---|---|---|
+| Raw PKCS#1 v1.5 signature (default) | `pkcs7: false` | `signature` (base64) plus `cert`, `certId`, `certCN` |
+| Detached CMS / PKCS#7 | `pkcs7: true` | `pkcs7` (base64 DER `SignedData`) plus `chain`, `cert`, `mechanism`, `hash`, `keyType` |
+
+The digest algorithm is chosen per request with `hashAlg` (`SHA1`, `SHA256`, `SHA384`, `SHA512`; default `SHA256`). With `alreadyHashed: true` the payload must be a digest of exactly that length (or, for RSA, an already-wrapped `DigestInfo` structure). RSA and EC tokens are both supported.
 
 ---
 
@@ -174,26 +206,33 @@ VyomKunji was designed from day one around **zero-trust and non-repudiation**:
 
 ```
 vyomkunji/
-├── .github/workflows/       # GitHub Actions CI and Automated Release pipelines
+├── .github/
+│   ├── dependabot.yml       # Automated dependency update requests
+│   └── workflows/           # GitHub Actions CI and Automated Release pipelines
 ├── docs/                    # Architectural specs, USAGE guide, and theme documentation
 │   ├── portal-integration/  # Per-portal reverse-engineering and payload notes
+│   ├── FIREFOX-MV3.md       # Firefox Manifest V3 migration plan (event page, rollback)
 │   ├── THEME.md             # Customizing JSON color palettes
 │   └── USAGE.md             # Comprehensive portal-by-portal user manual
 ├── extension/               # Chrome Manifest V3 browser extension source
+│   └── tests/               # Node tests for the background native-messaging bridge
 ├── extension-firefox/       # Firefox Manifest V2 companion extension source
-├── native-app/              # Rust workspace
+├── native-app/              # Rust workspace (Rust 2024 edition)
 │   ├── src/
 │   │   ├── bin/gui.rs       # egui/fastframe desktop GUI and tray shell
 │   │   ├── bin/test_sign.rs # Command-line signing self-test utility
 │   │   ├── main.rs          # Chrome native messaging host entrypoint
-│   │   ├── pkcs11.rs        # Hardware token communication & RSA-PKCS#1 v1.5 crypto
-│   │   ├── bridge.rs        # Localhost JSON-lines inter-process bridge
+│   │   ├── pkcs11.rs        # Hardware token communication, hashing, RSA/ECDSA signing
+│   │   ├── cms_sign.rs      # Detached CMS/PKCS#7 SignedData assembly
+│   │   ├── bridge.rs        # Token-authenticated localhost JSON-lines bridge
 │   │   ├── theme.rs         # Dynamic dark/light color palette engine
 │   │   └── timeutil.rs      # Dependency-free civil timestamp & date conversions
 │   ├── Cargo.toml           # Rust package manifest
 │   └── install-host.ps1     # Native messaging host registry installer
 ├── shared/                  # Common protocol documentation
 │   └── protocol.md          # Extension ↔ Native App JSON wire format
+├── tools/                   # Version, parity, signing, and sync helpers
+├── deny.toml                # cargo-deny policy (advisories, licenses, bans, sources)
 ├── LICENSE                  # GNU Affero General Public License v3.0 (AGPL-3.0)
 └── README.md                # Project documentation
 ```

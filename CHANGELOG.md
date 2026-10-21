@@ -6,7 +6,73 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.3.0] — 2026-10-21
+## [Unreleased]
+
+### Added
+- **Authenticated GUI bridge**: every host-to-GUI request now carries a per-session
+  32-byte random token stored in `%APPDATA%\VyomKunji\gui.token` (legacy
+  `%APPDATA%\Signer\gui.token` remains readable). Requests without a valid token are
+  rejected with `UNAUTHORIZED`.
+- **Origin-aware approvals**: the extension always reports the browser's real tab URL,
+  the host forwards it to the GUI, and the approval card shows it. Non-`https://*.gov.in`
+  origins are marked **unverified**; local requests are labelled **Local request**.
+- **Multiple digest algorithms**: `hashAlg` accepts `SHA1`, `SHA256`, `SHA384`, and
+  `SHA512` for raw and pre-hashed signing.
+- **EC token support**: certificates and private keys are classified as RSA or EC, and
+  ECDSA signing uses the matching PKCS#11 mechanism.
+- **Detached CMS / PKCS#7 output**: `pkcs7: true` returns a detached CMS `SignedData`
+  containing the signing certificate and any intermediates found on the token
+  (`chain`), alongside the raw signature metadata.
+- **Headless PIN signing is opt-in**: direct host-side signing with a PIN requires
+  `VYOMKUNJI_ALLOW_HEADLESS_PIN=1` **and** a request with no browser origin. Browser
+  requests always require GUI approval.
+- **Installer lifecycle**: per-user or machine-wide install, optional sign-in autostart,
+  close-running-app handling, uninstall cleanup, and `install-host.ps1 -Unregister`.
+- **Diagnostics**: Settings now has **Copy diagnostics** (version, module, token label,
+  bridge state, recent log; no PINs, signatures, certificate bodies, or usernames), and
+  `VYOMKUNJI_CRASH_LOG=1` optionally appends local panic details to
+  `%LOCALAPPDATA%\VyomKunji\crash.log`.
+- **Firefox MV3 migration plan** (`docs/FIREFOX-MV3.md`): event-page model, manifest
+  translation, testing matrix, and rollback plan. Firefox continues to ship MV2.
+- **Supply-chain checks**: `deny.toml`, Dependabot updates, SHA-pinned GitHub Actions,
+  and a CI `cargo-deny` job scoped to the Windows target.
+- **Extension lifecycle tests**: Node tests for host probing, request correlation,
+  disconnect handling, sender validation, and origin pinning; `tools/check-extensions.ps1`
+  verifies byte-level Chrome/Firefox parity and manifest/script validity.
+- **Version tooling**: `tools/check-version.ps1` (single-source version guard) and
+  `tools/bump-version.ps1`.
+- **Optional Windows code signing**: `tools/sign-windows.ps1` and release-workflow
+  support for `WINDOWS_CERT_PFX_BASE64` / `WINDOWS_CERT_PASSWORD`; unsigned releases
+  still publish `SHA256SUMS.txt`.
+
+### Changed
+- **Rust 2024 edition**: `native-app` now compiles with `edition = "2024"` and
+  `rust-version = "1.98"` (the version required by the egui/eframe and fastframe
+  dependency graph). The code now uses edition-2024 features such as `let` chains.
+- **`cryptoki` 0.12.1**: fixes RUSTSEC-2026-0286 (out-of-bounds read when decoding
+  `CKA_ALLOWED_MECHANISMS`).
+- **Smaller dependency graph**: CMS is assembled directly through `cms`/`der`/`x509-cert`
+  without the `cms` builder feature, removing the `rsa` crate and its Marvin advisory.
+- **Startup log rotation**: `%TEMP%\vyomkunji-startup.log` is capped at 1 MiB with one
+  `.1` generation.
+- **Extension host probing**: background code probes `com.vyomkunji.host` first, then
+  `com.signer.host`, keeps one native port, and rejects in-flight requests cleanly when
+  the host disconnects.
+
+### Fixed
+- Portal names are read from the top-level `portal` field sent by the content scripts.
+- Page-supplied `origin` values can no longer override the extension's real tab URL.
+- A wrong PIN is no longer retried against every token slot, avoiding unnecessary retry
+  counter increments.
+- Legacy `com.signer.host` registrations and endpoint files are cleaned up on uninstall.
+- Native-host manifests are written as UTF-8 without a BOM.
+- Stale port/token files are removed on GUI shutdown, and the token is published before
+  the port during startup.
+- The installer's completion message expands `{app}` correctly.
+
+---
+
+## [0.3.0] - 2026-10-21
 
 ### Added
 - **AGPL-3.0 License**: Added GNU Affero General Public License version 3.0 (`LICENSE`).
