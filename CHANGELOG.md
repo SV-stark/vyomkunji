@@ -26,6 +26,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 - **egui / eframe 0.31 → 0.36.2** (the new `App::ui` API, `Panel::top/left/bottom`).
+- **PKCS#11 auto-detection broadened**: added SafeNet/Gemalto, G&D StarSign (SafeSign), Precision InnaIT, and mToken (CryptoID) module names/directories, plus `safesign`/`aet`/`starcos`/`inna`/`precision`/`csp11` scan patterns.
 - The GUI was redesigned: sidebar navigation, card-based screens, certificate grid with
   expiry colouring, request approval card, activity log, status bar.
 - Release binary grew from 4.99 MB to 8.77 MB (Inter, tray and shell crates).
