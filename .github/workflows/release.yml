@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  # Manual escape hatch: a release can be re-run from an existing tag
+  # (`gh workflow run release.yml --ref v0.4.1`) if the automatic run was
+  # lost or failed. GITHUB_REF_NAME still resolves to the tag, so the
+  # artifact names and the created release are identical to a tag push.
+  workflow_dispatch:
 
 permissions:
   contents: write

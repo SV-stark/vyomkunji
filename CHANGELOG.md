@@ -32,6 +32,9 @@ changes for users.
 - **CI and release reliability**: the `web-ext` steps install the package once
   with retries instead of fetching it per step, so a transient npm `ECONNRESET`
   no longer fails a build or a release.
+- **Manual release dispatch**: the release workflow can now be re-run from an
+  existing tag (`gh workflow run release.yml --ref v0.4.1`) if the automatic
+  run is lost.
 
 ### Known limitations
 - The `egui` 0.37 upgrade is still blocked upstream: `fastframe` v0.14.0 pins
