@@ -51,7 +51,7 @@ fastframe-tray = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-shell = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 # Default features are Linux-only (libappindicator / libxdo); Windows always
 # gets the native Shell_NotifyIcon backend.
-tray-icon = { version = "0.25", default-features = false }
+tray-icon = { version = "0.26", default-features = false }
 
 # Smaller, faster-starting release binaries. Thin LTO and one codegen unit let
 # the linker drop unused generic code; stripping removes debug symbols from the
