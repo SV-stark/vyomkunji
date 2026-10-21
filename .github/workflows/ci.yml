@@ -78,10 +78,17 @@ jobs:
         run: ./tools/check-version.ps1
 
       - name: Lint the Firefox MV3 add-on with web-ext
-        run: npx --yes web-ext@8.3.0 lint --source-dir extension-firefox
+        shell: pwsh
+        run: |
+          # Install once with retries instead of letting `npx --yes` fetch the
+          # package per step: a transient npm reset must not fail the build.
+          npm install --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-maxtimeout=120000 web-ext@8.3.0
+          npx --no-install web-ext lint --source-dir extension-firefox
 
       - name: Build the Firefox add-on package
-        run: npx --yes web-ext@8.3.0 build --source-dir extension-firefox --artifacts-dir dist --overwrite-dest
+        shell: pwsh
+        run: |
+          npx --no-install web-ext build --source-dir extension-firefox --artifacts-dir dist --overwrite-dest
 
   supply-chain:
     name: Supply Chain

@@ -97,7 +97,9 @@ jobs:
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME
-          npx --yes web-ext@8.3.0 build --source-dir extension-firefox --artifacts-dir "dist" --overwrite-dest --filename "vyomkunji-firefox-$tag-mv3.zip"
+          # Install with retries: a transient npm reset must not fail a release.
+          npm install --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-maxtimeout=120000 web-ext@8.3.0
+          npx --no-install web-ext build --source-dir extension-firefox --artifacts-dir "dist" --overwrite-dest --filename "vyomkunji-firefox-$tag-mv3.zip"
           $built = "dist\vyomkunji-firefox-$tag-mv3.zip"
           if (-not (Test-Path $built)) { throw "web-ext did not produce a Firefox package" }
           Move-Item $built "dist\vyomkunji-firefox-$tag.xpi" -Force
