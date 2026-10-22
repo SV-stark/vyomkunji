@@ -8,7 +8,12 @@
     "mca.gov.in": { name: "MCA", triggers: ["sign with dsc", "dsc sign", "sign using dsc"] },
     "epfindia.gov.in": { name: "EPFO", triggers: ["sign with dsc", "dsc sign", "sign using dsc"] },
     "tdscpc.gov.in": { name: "TDS", triggers: ["sign with dsc", "dsc sign", "sign using dsc"] },
-    "traces.gov.in": { name: "TRACES", triggers: ["sign with dsc", "dsc sign", "sign using dsc"] }
+    "traces.gov.in": { name: "TRACES", triggers: ["sign with dsc", "dsc sign", "sign using dsc"] },
+    "ireps.gov.in": { name: "IREPS", triggers: ["sign with dsc", "dsc sign", "sign using dsc", "sign with digital signature"] },
+    "eprocure.gov.in": { name: "CPPP/eProcurement", triggers: ["sign with dsc", "dsc sign", "sign using dsc", "sign with digital signature"] },
+    "etenders.gov.in": { name: "eProcurement", triggers: ["sign with dsc", "dsc sign", "sign using dsc", "sign with digital signature"] },
+    "icegate.gov.in": { name: "ICEGATE", triggers: ["sign with dsc", "dsc sign", "sign using dsc", "sign with digital signature"] },
+    "dgft.gov.in": { name: "DGFT", triggers: ["sign with dsc", "dsc sign", "sign using dsc", "sign with digital signature"] }
   };
 
   function detectPortal(host) {

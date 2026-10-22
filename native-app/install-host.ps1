@@ -80,7 +80,7 @@ function Register-Chrome {
       continue
     }
     $manifest = Get-Content $src -Raw
-    $manifest = $manifest -replace "REPLACE_WITH_ABSOLUTE_PATH_TO_signer-host.exe", ($ExePath -replace "\\","\\\\")
+    $manifest = $manifest -replace "REPLACE_WITH_ABSOLUTE_PATH_TO_signer-host.exe", ($ExePath -replace "\\","\\")
     $manifest = $manifest -replace "REPLACE_WITH_EXTENSION_ID", $ChromeExtensionId
     $out = Join-Path $PSScriptRoot "$hostName.installed.json"
     Write-Utf8NoBom $out $manifest
@@ -99,7 +99,7 @@ function Register-Firefox {
       continue
     }
     $manifest = Get-Content $src -Raw
-    $manifest = $manifest -replace "REPLACE_WITH_ABSOLUTE_PATH_TO_signer-host.exe", ($ExePath -replace "\\","\\\\")
+    $manifest = $manifest -replace "REPLACE_WITH_ABSOLUTE_PATH_TO_signer-host.exe", ($ExePath -replace "\\","\\")
     $manifest = $manifest -replace "REPLACE_WITH_FIREFOX_EXTENSION_ID", $FirefoxExtensionId
     $out = Join-Path $PSScriptRoot "$hostName.firefox.installed.json"
     Write-Utf8NoBom $out $manifest

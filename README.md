@@ -43,7 +43,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 | **MCA21 v3** (`mca.gov.in`) | Company incorporations, annual ROC filings, director KYC | 🟢 **Supported (Generic Shim)** |
 | **EPFO Unified Portal** (`epfindia.gov.in`) | Employer PF returns, DSC registration, claim approvals | 🟢 **Supported (Generic Shim)** |
 | **TRACES / TDS** (`traces.gov.in`, `tdscpc.gov.in`) | 24Q, 26Q TDS returns, certificate generation | 🟢 **Supported (Generic Shim)** |
-| **e-Procurement / CPPP / ICEGATE** | Government tenders, customs, foreign trade | 🟡 **Phase 2 (In Development)** |
+| **e-Procurement / CPPP / ICEGATE / IREPS / DGFT** | Government tenders, customs, foreign trade, rail procurement | 🟢 **Supported (Generic Shim, Phase 2)** |
 
 ---
 

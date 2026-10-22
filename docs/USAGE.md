@@ -106,7 +106,7 @@ drivers, no emSigner/emBridge/CrisSigner.**
 | MCA | mca.gov.in | Generic interceptor |
 | EPFO | epfindia.gov.in | Generic interceptor |
 | TDS / TRACES | tdscpc.gov.in, traces.gov.in | Generic interceptor |
-| Subscription portals | IREPS, ICEGATE, DGFT, … | Phase 2 |
+| Subscription portals | IREPS, CPPP/eProcurement, ICEGATE, DGFT | Generic interceptor (Phase 2) |
 
 ## Adding a new portal
 

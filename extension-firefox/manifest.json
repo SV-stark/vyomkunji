@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VyomKunji — India G2C Digital Signing",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Unified digital signing on Indian government portals using your DSC token.",
   "permissions": ["nativeMessaging", "storage", "activeTab"],
   "host_permissions": [
@@ -16,7 +16,17 @@
     "https://*.tdscpc.gov.in/*",
     "https://tdscpc.gov.in/*",
     "https://*.traces.gov.in/*",
-    "https://traces.gov.in/*"
+    "https://traces.gov.in/*",
+    "https://*.ireps.gov.in/*",
+    "https://ireps.gov.in/*",
+    "https://*.eprocure.gov.in/*",
+    "https://eprocure.gov.in/*",
+    "https://*.etenders.gov.in/*",
+    "https://etenders.gov.in/*",
+    "https://*.icegate.gov.in/*",
+    "https://icegate.gov.in/*",
+    "https://*.dgft.gov.in/*",
+    "https://dgft.gov.in/*"
   ],
   "background": {
     "scripts": ["src/background.js"]
@@ -33,7 +43,12 @@
         "https://*.mca.gov.in/*", "https://mca.gov.in/*",
         "https://*.epfindia.gov.in/*", "https://epfindia.gov.in/*",
         "https://*.tdscpc.gov.in/*", "https://tdscpc.gov.in/*",
-        "https://*.traces.gov.in/*", "https://traces.gov.in/*"
+        "https://*.traces.gov.in/*", "https://traces.gov.in/*",
+        "https://*.ireps.gov.in/*", "https://ireps.gov.in/*",
+        "https://*.eprocure.gov.in/*", "https://eprocure.gov.in/*",
+        "https://*.etenders.gov.in/*", "https://etenders.gov.in/*",
+        "https://*.icegate.gov.in/*", "https://icegate.gov.in/*",
+        "https://*.dgft.gov.in/*", "https://dgft.gov.in/*"
       ],
       "js": ["src/content/generic.js"],
       "run_at": "document_idle"
@@ -52,7 +67,12 @@
         "https://*.mca.gov.in/*", "https://mca.gov.in/*",
         "https://*.epfindia.gov.in/*", "https://epfindia.gov.in/*",
         "https://*.tdscpc.gov.in/*", "https://tdscpc.gov.in/*",
-        "https://*.traces.gov.in/*", "https://traces.gov.in/*"
+        "https://*.traces.gov.in/*", "https://traces.gov.in/*",
+        "https://*.ireps.gov.in/*", "https://ireps.gov.in/*",
+        "https://*.eprocure.gov.in/*", "https://eprocure.gov.in/*",
+        "https://*.etenders.gov.in/*", "https://etenders.gov.in/*",
+        "https://*.icegate.gov.in/*", "https://icegate.gov.in/*",
+        "https://*.dgft.gov.in/*", "https://dgft.gov.in/*"
       ]
     }
   ],

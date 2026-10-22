@@ -8,28 +8,37 @@ function sendNative(payload) {
 }
 
 async function refresh() {
-  const status = await sendNative({ id: crypto.randomUUID(), type: "status" });
-  $("status").textContent = status?.ok ? "connected" : "disconnected";
-  $("token").textContent = status?.ok && status.token_connected ? "present" : "none";
-  const tokens = await sendNative({ id: crypto.randomUUID(), type: "listTokens" });
-  const certs = [];
-  if (tokens?.ok && tokens.tokens) {
-    for (const t of tokens.tokens) for (const c of t.certs) certs.push(c);
-  }
-  if (certs.length) {
-    $("certRow").hidden = false;
-    const sel = $("certSelect");
-    sel.innerHTML = "";
-    const stored = await chrome.storage.local.get("defaultCertCN");
-    for (const c of certs) {
-      const opt = document.createElement("option");
-      opt.value = c.cn;
-      opt.textContent = c.cn || c.subject || c.id;
-      if (stored.defaultCertCN && stored.defaultCertCN === c.cn) opt.selected = true;
-      sel.appendChild(opt);
+  try {
+    const status = await sendNative({ id: crypto.randomUUID(), type: "status" });
+    $("status").textContent = status?.ok ? "connected" : "disconnected";
+    const tokens = await sendNative({ id: crypto.randomUUID(), type: "listTokens" });
+    const tokenList = (tokens?.ok && Array.isArray(tokens.tokens)) ? tokens.tokens : [];
+    if (tokenList.length) {
+      $("token").textContent = tokenList.map((t) => t.label || t.id || "token").join(", ");
+    } else {
+      $("token").textContent = status?.ok ? "none" : "—";
     }
-  } else {
-    $("certRow").hidden = true;
+    const certs = [];
+    for (const t of tokenList) for (const c of (t.certs || [])) certs.push(c);
+    if (certs.length) {
+      $("certRow").hidden = false;
+      const sel = $("certSelect");
+      sel.innerHTML = "";
+      const stored = await chrome.storage.local.get("defaultCertCN");
+      for (const c of certs) {
+        const opt = document.createElement("option");
+        opt.value = c.cn;
+        opt.textContent = c.cn || c.subject || c.id;
+        if (stored.defaultCertCN && stored.defaultCertCN === c.cn) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    } else {
+      $("certRow").hidden = true;
+    }
+  } catch (e) {
+    $("status").textContent = "disconnected";
+    $("token").textContent = "—";
+    console.error("[VyomKunji popup]", e);
   }
 }
 

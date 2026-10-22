@@ -6,6 +6,27 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.2] - 2026-10-22
+
+Phase 2 subscription portals and Firefox/Chrome connectivity fixes.
+
+### Added
+- **Phase 2 portal support (generic shim)**: IREPS, CPPP/eProcurement, ICEGATE,
+  DGFT (and `etenders.gov.in`) are now covered by the generic content script and
+  main-world network interceptor, matching the GST/MCA/EPFO/TDS flow.
+- **Token name in extension popup**: the popup now shows the attached token's label
+  instead of a generic "present", with error handling to avoid a stuck "checking..."
+  state.
+
+### Fixed
+- **Native host launch on Windows (Chrome + Firefox)**: `install-host.ps1`
+  over-escaped backslashes in the host manifest `path`, so the browser could not
+  launch `vyomkunji-host.exe`. The path is now escaped correctly for JSON.
+- **Phase 2 documentation**: README, USAGE and features.md updated to reflect the
+  newly supported subscription portals.
+
+---
+
 ## [0.4.1] - 2026-10-21
 
 Maintenance release: dependency updates and CI hardening only - no behaviour
