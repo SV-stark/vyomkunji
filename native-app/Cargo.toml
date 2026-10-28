@@ -51,7 +51,7 @@ egui = "0.36.2"
 fastframe-text = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-fonts = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-theme = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-fastframe-tray = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-tray = { git = "https://github.com/crmne/fastframe", tag = "v0.14.1" }
 fastframe-shell = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 # Default features are Linux-only (libappindicator / libxdo); Windows always
 # gets the native Shell_NotifyIcon backend.
