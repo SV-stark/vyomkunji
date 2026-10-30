@@ -186,7 +186,7 @@ dependencies = [
  "futures-lite",
  "parking",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "slab",
  "windows-sys 0.61.2",
 ]
@@ -217,7 +217,7 @@ dependencies = [
  "cfg-if",
  "event-listener",
  "futures-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -243,7 +243,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
@@ -417,7 +417,7 @@ checksum = "43b32313e937c8721c9d17ee9bf60699a6402b4b7c2cb6ac1bee0ffcaa4b4e5e"
 dependencies = [
  "bitflags 2.13.2",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "tracing",
 ]
 
@@ -440,16 +440,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138efcf0940a02ebf0cc8d1eff41a1682a46b431630f4c52450d6265876021fa"
 dependencies = [
  "calloop 0.14.5",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-client",
 ]
 
 [[package]]
 name = "cc"
-version = "1.9.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877bf67ac8e52449eb2f9e98a344ea163beb70dd1f9eebe3cc5357dcfeaee4df"
+checksum = "86e055fa6e3e40ad6187ba25b6855eeb635d5271f8e0f0e1e9a5826b8d75bea0"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -491,9 +491,9 @@ dependencies = [
 
 [[package]]
 name = "clipboard-win"
-version = "5.4.1"
+version = "5.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
 dependencies = [
  "error-code",
 ]
@@ -1232,15 +1232,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
-name = "fsevent-sys"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76ee7a02da4d231650c7cea31349b889be2f45ddb3ef3032d2ec8185f6313fd2"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1301,7 +1292,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-link",
 ]
 
@@ -1785,9 +1776,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "memmap2"
-version = "0.9.11"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
 dependencies = [
  "libc",
 ]
@@ -1971,27 +1962,28 @@ dependencies = [
 
 [[package]]
 name = "notify"
-version = "8.2.0"
+version = "8.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d3d07927151ff8575b7087f245456e549fea62edf0ec4e565a5ee50c8402bc3"
+checksum = "82f812702fbc75d35416d3f884e04925be7e9498f4eceea2e24ba34559284674"
 dependencies = [
  "bitflags 2.13.2",
- "fsevent-sys",
  "inotify",
  "kqueue",
  "libc",
  "log",
  "mio",
  "notify-types",
+ "objc2-core-foundation",
+ "objc2-core-services",
  "walkdir",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "notify-types"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42b8cfee0e339a0337359f3c88165702ac6e600dc01c0cc9579a92d62b08477a"
+checksum = "0a437a9308232ce794b1e7fdf540d38ea37efc3c73492640c13b4c8568b8f108"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -2189,6 +2181,16 @@ dependencies = [
  "objc2 0.5.3",
  "objc2-contacts",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-core-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "583300ad934cba24ff5292aee751ecc070f7ca6b39a574cc21b7b5e588e06a0b"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -2513,7 +2515,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -2735,9 +2737,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
@@ -2935,9 +2937,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.16.3"
+version = "1.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
+checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
 name = "smithay-client-toolkit"
@@ -2977,7 +2979,7 @@ dependencies = [
  "libc",
  "log",
  "memmap2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "wayland-backend",
  "wayland-client",
@@ -3079,7 +3081,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -3190,9 +3192,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.54.0"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -3362,15 +3364,15 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-width"
-version = "0.1.14"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "uuid"
-version = "1.28.0"
+version = "1.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
+checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -3413,7 +3415,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vyomkunji"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "base64",
  "cms",
@@ -3528,7 +3530,7 @@ checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -3541,7 +3543,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c36a0f861ad76d0901f2800b46321410d9f73f2ea88aac0650d86c32688073"
 dependencies = [
  "bitflags 2.13.2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -3563,7 +3565,7 @@ version = "0.31.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-client",
  "xcursor",
 ]
@@ -4068,7 +4070,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "x11rb-protocol",
 ]
 
@@ -4160,7 +4162,7 @@ dependencies = [
  "hex",
  "libc",
  "ordered-stream",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_repr",
  "tokio",
@@ -4202,9 +4204,9 @@ dependencies = [
 
 [[package]]
 name = "zcheapstr"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1afec51604565183aeb5c54c20aeab286120d4e4460f7f76e3e8bb8c0d99473"
+checksum = "939f186d9ecebe044315a5cb6d6f78568bbc21152adc954d5a0c2f58bdbc9920"
 dependencies = [
  "serde",
 ]

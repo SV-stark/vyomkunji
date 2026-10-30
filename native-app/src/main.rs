@@ -152,6 +152,23 @@ fn handle(req: &Req, mock: bool) -> Resp {
     // the GUI will handle never pays for (or blocks on) a token probe here.
     match req.rtype.as_str() {
         "status" => {
+            if let Some(resp) = bridge::request_gui(
+                &serde_json::json!({ "type": "status" }),
+                Duration::from_millis(1500),
+            ) && resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)
+            {
+                return Resp {
+                    id: req.id.clone(),
+                    ok: true,
+                    module: resp
+                        .get("module")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    token_connected: resp.get("token_connected").and_then(|v| v.as_bool()),
+                    cert_selected: resp.get("cert_selected").and_then(|v| v.as_bool()),
+                    ..Default::default()
+                };
+            }
             let (module, _tm, tokens) = match TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
                 Ok(v) => v,
                 Err(e) => return err("NO_PKCS11_MODULE", e),
@@ -170,6 +187,23 @@ fn handle(req: &Req, mock: bool) -> Resp {
             }
         }
         "listTokens" => {
+            if let Some(resp) = bridge::request_gui(
+                &serde_json::json!({ "type": "listTokens" }),
+                Duration::from_millis(2000),
+            ) && resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)
+            {
+                return Resp {
+                    id: req.id.clone(),
+                    ok: true,
+                    module: resp
+                        .get("module")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    token_connected: resp.get("token_connected").and_then(|v| v.as_bool()),
+                    tokens: resp.get("tokens").cloned(),
+                    ..Default::default()
+                };
+            }
             let (module, _tm, tokens) = match TokenManager::auto_connected(pkcs11::PROBE_TIMEOUT) {
                 Ok(v) => v,
                 Err(e) => return err("NO_PKCS11_MODULE", e),
@@ -180,6 +214,25 @@ fn handle(req: &Req, mock: bool) -> Resp {
                 module: Some(module),
                 token_connected: Some(true),
                 tokens: Some(tokens),
+                ..Default::default()
+            }
+        }
+        "selectCert" => {
+            let payload = req.payload.clone().unwrap_or(Value::Null);
+            let cert_cn = payload
+                .get("certCN")
+                .and_then(|v| v.as_str())
+                .or_else(|| payload.get("certId").and_then(|v| v.as_str()));
+            let _ = bridge::request_gui(
+                &serde_json::json!({
+                    "type": "selectCert",
+                    "certCN": cert_cn
+                }),
+                Duration::from_millis(1000),
+            );
+            Resp {
+                id: req.id.clone(),
+                ok: true,
                 ..Default::default()
             }
         }
@@ -361,6 +414,11 @@ fn handle_mock(req: &Req, err: impl Fn(&str, String) -> Resp) -> Resp {
             }])),
             ..Default::default()
         },
+        "selectCert" => Resp {
+            id: req.id.clone(),
+            ok: true,
+            ..Default::default()
+        },
         _ => err("UNKNOWN_TYPE", format!("unknown type {}", req.rtype)),
     }
 }
@@ -384,6 +442,16 @@ mod tests {
         let response = handle(&request("ping", None), true);
         assert!(response.ok);
         assert_eq!(response.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn select_cert_returns_ok() {
+        let response = handle(
+            &request("selectCert", Some(serde_json::json!({"certCN": "Test"}))),
+            true,
+        );
+        assert!(response.ok);
+        assert_eq!(response.id, "test-id");
     }
 
     #[test]

@@ -106,7 +106,8 @@ drivers, no emSigner/emBridge/CrisSigner.**
 | MCA | mca.gov.in | Generic interceptor |
 | EPFO | epfindia.gov.in | Generic interceptor |
 | TDS / TRACES | tdscpc.gov.in, traces.gov.in | Generic interceptor |
-| Subscription portals | IREPS, CPPP/eProcurement, ICEGATE, DGFT | Generic interceptor (Phase 2) |
+| Subscription & Central | IREPS, CPPP, eTenders, ICEGATE, DGFT, GeM, ESIC, eOffice | Universal interceptor (Phase 2) |
+| State e-Procurement | *tenders.gov.in, *.nic.in, tenderwizard.com, nprocure.com | Universal interceptor across all States |
 
 ## Adding a new portal
 
@@ -121,7 +122,7 @@ drivers, no emSigner/emBridge/CrisSigner.**
 ## Headless / API use
 
 The native host speaks the JSON protocol in `shared/protocol.md` over Chrome Native
-Messaging. Message types: `ping`, `status`, `listTokens`, `sign`.
+Messaging. Message types: `ping`, `status`, `listTokens`, `selectCert`, `sign`.
 
 For a quick token check and signing test:
 ```bash

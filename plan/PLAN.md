@@ -139,10 +139,10 @@ Other message types: `listTokens`, `selectCert`, `pin`, `status`, `ping`.
 - M0 (week 1-2): Plan + protocol + repo scaffold. ✅
 - M1 (week 3-4): Native host (native messaging) + token enumeration. ✅
 - M2 (week 5-6): Extension MV3 (Chrome service worker + Firefox event page) + incometax.gov.in content script + shim. ✅
-- M3 (week 7-8): Real PKCS#11 signing + cert picker + PIN. ✅ (PIN test pending)
-- M4 (week 9-10): End-to-end on IT portal (ITR signing) + tests. 🟡
-- M5 (week 11-12): Remote signing (phone approve) + audit log. 🟡
-- M6 (week 13+): Other free portals, then subscription portals.
+- M3 (week 7-8): Real PKCS#11 signing + cert picker + PIN. ✅
+- M4 (week 9-10): End-to-end on IT portal (ITR signing) + unit and integration tests. ✅
+- M5 (week 11-12): Multi-portal localhost signer emulation (HTTP + WebSocket) + audit log. ✅
+- M6 (week 13+): Full portal support across Central & State portals (GeM, ICEGATE, DGFT, CPPP, IREPS, State e-Tenders). ✅
 
 **Shipped alongside M0–M3:** the tray + resident shell (the app keeps serving with the
 window closed and opens itself for a request), light/dark palettes and the JSON palette

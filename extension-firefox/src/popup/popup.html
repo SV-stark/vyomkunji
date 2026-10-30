@@ -4,27 +4,34 @@
   <meta charset="utf-8">
   <title>VyomKunji</title>
   <style>
-    body { font-family: system-ui, sans-serif; width: 300px; padding: 12px; }
-    h3 { margin: 0 0 8px; }
-    .row { margin: 6px 0; font-size: 13px; }
-    select { width: 100%; padding: 6px; margin-top: 4px; }
-    button { width: 100%; padding: 8px; margin-top: 8px; }
-    #status { color: #555; }
-    .note { font-size: 11px; color: #777; margin-top: 8px; }
+    body { font-family: system-ui, sans-serif; width: 320px; padding: 14px; margin: 0; box-sizing: border-box; }
+    h3 { margin: 0 0 10px; font-size: 15px; color: #111; }
+    .row { margin: 6px 0; font-size: 13px; color: #333; }
+    .badge-ok { color: #15803d; font-weight: 600; }
+    .badge-err { color: #b91c1c; font-weight: 600; }
+    select { width: 100%; padding: 6px; margin-top: 4px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; }
+    button { width: 100%; padding: 8px; margin-top: 8px; border-radius: 4px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; }
+    #refresh { background: #2563eb; color: #fff; }
+    #refresh:hover { background: #1d4ed8; }
+    #openOptions { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
+    #openOptions:hover { background: #e5e7eb; }
+    .note { font-size: 11px; color: #6b7280; margin-top: 10px; line-height: 1.4; }
   </style>
 </head>
 <body>
   <h3>VyomKunji India G2C</h3>
   <div class="row">Status: <span id="status">checking…</span></div>
   <div class="row">Token: <span id="token">—</span></div>
+  <div class="row" id="moduleRow" hidden>Driver: <span id="module">—</span></div>
   <div class="row" id="certRow" hidden>
     Default certificate:
     <select id="certSelect"></select>
   </div>
   <button id="refresh">Refresh</button>
+  <button id="openOptions">Settings &amp; Portals</button>
   <div class="note">
-    Sign requests on supported portals are approved in the VyomKunji GUI.
-    Keep the GUI running to sign.
+    Sign requests on supported Indian government portals are approved in the VyomKunji GUI.
+    Keep the desktop app running to sign.
   </div>
   <script src="popup.js"></script>
 </body>

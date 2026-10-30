@@ -360,6 +360,11 @@ fn known_dll_names() -> &'static [&'static str] {
         "cryptoida_pkcs11_f2.dll",
         "cryptoida_pkcs11_f3.dll",
         "cryptoid_pkcs11.dll",
+        "mtoken_pkcs11.dll",
+        "mtoken_pkcs11_64.dll",
+        "mPki11.dll",
+        "mPki11_64.dll",
+        "ShuttleCsp11_3003.dll",
         // SafeSign / AET / G&D (StarSign, StarCos)
         "aetpkss1.dll",
         "aetpksse.dll",
@@ -374,6 +379,8 @@ fn known_dll_names() -> &'static [&'static str] {
         "pantasignpkcs11.dll",
         "safescryptpkcs11.dll",
         "emudhrapkcs11.dll",
+        "SignatureP11.dll",
+        "TrustKeyP11.dll",
         "ncodepkcs11.dll",
         "vsignpkcs11.dll",
         "idsignpkcs11.dll",
@@ -381,6 +388,12 @@ fn known_dll_names() -> &'static [&'static str] {
         "prodigisignpkcs11.dll",
         "care4signpkcs11.dll",
         "signxpkcs11.dll",
+        "ngp11v211.dll",
+        "ePass2003_India.dll",
+        "ePass2003-Auto.dll",
+        "WatchdataPKCS11.dll",
+        "WatchdataPKCS11_64.dll",
+        "eTokenPKCS11.dll",
     ]
 }
 

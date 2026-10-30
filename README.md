@@ -43,7 +43,10 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 | **MCA21 v3** (`mca.gov.in`) | Company incorporations, annual ROC filings, director KYC | 🟢 **Supported (Generic Shim)** |
 | **EPFO Unified Portal** (`epfindia.gov.in`) | Employer PF returns, DSC registration, claim approvals | 🟢 **Supported (Generic Shim)** |
 | **TRACES / TDS** (`traces.gov.in`, `tdscpc.gov.in`) | 24Q, 26Q TDS returns, certificate generation | 🟢 **Supported (Generic Shim)** |
-| **e-Procurement / CPPP / ICEGATE / IREPS / DGFT** | Government tenders, customs, foreign trade, rail procurement | 🟢 **Supported (Generic Shim, Phase 2)** |
+| **ICEGATE & DGFT** (`icegate.gov.in`, `dgft.gov.in`) | Indian Customs import/export, foreign trade, COO | 🟢 **Supported (Universal Shim, Phase 2)** |
+| **CPPP / eTenders / IREPS** (`eprocure.gov.in`, `etenders.gov.in`, `ireps.gov.in`) | Central tenders, railway procurement, auction bidding | 🟢 **Supported (Universal Shim, Phase 2)** |
+| **GeM / ESIC / eOffice** (`gem.gov.in`, `esic.gov.in`, `eoffice.gov.in`) | Government e-Marketplace, social security, digital office | 🟢 **Supported (Universal Shim, Phase 2)** |
+| **State e-Procurement Portals** (`*tenders.gov.in`, `*.nic.in`, `tenderwizard.com`, `nprocure.com`) | State tenders (Maharashtra, Karnataka, West Bengal, Tamil Nadu, UP, Delhi, Gujarat, etc.) | 🟢 **Supported (Universal Shim, Phase 2)** |
 
 ---
 
@@ -97,7 +100,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 ### Option 1: Quick Install (Pre-Built Release)
 
 1. **Download the latest release**:
-   Download `vyomkunji-v0.4.1-windows-x64.zip` from [GitHub Releases](https://github.com/SV-stark/vyomkunji/releases/latest).
+   Download `vyomkunji-v0.5.0-windows-x64.zip` from [GitHub Releases](https://github.com/SV-stark/vyomkunji/releases/latest).
 2. **Extract the archive** to any folder on your computer (e.g. `C:\Program Files\VyomKunji` or your User folder).
    > A one-click installer (`vyomkunji-<version>-setup.exe`) is published as well. It installs per-user or machine-wide, registers the native host for Chrome/Edge and Firefox, closes a running app before upgrading, and can add an optional "start at sign-in" entry.
 3. **Register the Native Host**:
@@ -108,7 +111,7 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 4. **Install the Browser Extension**:
    * **Google Chrome / Microsoft Edge**:
      1. Open `chrome://extensions` and enable **Developer mode** (top right).
-     2. Extract `vyomkunji-chrome-v0.4.1.zip` and click **Load unpacked**.
+     2. Extract `vyomkunji-chrome-v0.5.0.zip` and click **Load unpacked**.
    * **Mozilla Firefox**:
      1. Open `about:debugging#/runtime/this-firefox`.
      2. Click **Load Temporary Add-on** and select `manifest.json` from the extracted Firefox extension zip.

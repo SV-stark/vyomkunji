@@ -1,34 +1,106 @@
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>VyomKunji Settings</title>
-<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:32px auto;padding:0 16px}h2{margin-top:24px}code{background:#f2f2f2;padding:2px 5px;border-radius:3px}</style>
+<head>
+  <meta charset="utf-8">
+  <title>VyomKunji Settings &amp; Diagnostics</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 720px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #1f2937;
+      line-height: 1.5;
+    }
+    h1 { font-size: 24px; font-weight: 700; color: #111827; margin-bottom: 4px; }
+    .subtitle { color: #4b5563; font-size: 14px; margin-bottom: 24px; }
+    h2 { font-size: 17px; font-weight: 600; color: #1f2937; margin-top: 28px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+    .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 12px 0; }
+    .row { display: flex; justify-content: space-between; align-items: center; margin: 8px 0; font-size: 14px; }
+    .label { font-weight: 500; color: #4b5563; }
+    .val { font-family: monospace; background: #e5e7eb; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    .status-ok { color: #15803d; font-weight: 600; }
+    .status-err { color: #b91c1c; font-weight: 600; }
+    .status-testing { color: #b45309; font-weight: 500; }
+    select { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #d1d5db; margin-top: 6px; font-size: 14px; }
+    button {
+      background: #2563eb; color: #fff; border: none; border-radius: 6px;
+      padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    .save-notice { font-size: 12px; color: #15803d; margin-top: 4px; font-weight: 500; height: 16px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e5e7eb; }
+    th { color: #4b5563; font-weight: 600; }
+    code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; font-size: 12px; }
+    .portal-tag { display: inline-block; background: #dbeafe; color: #1e40af; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  </style>
 </head>
 <body>
   <h1>VyomKunji India G2C — Settings</h1>
-  <p>The extension talks to the native host <code>vyomkunji-host.exe</code>, which signs via the GUI.</p>
+  <div class="subtitle">Driverless, Java-Free Digital Signature Client for Indian Government Portals</div>
 
-  <h2>Supported portals</h2>
-  <ul>
-    <li>Income Tax (incometax.gov.in) — priority</li>
-    <li>GST (gst.gov.in)</li>
-    <li>MCA (mca.gov.in)</li>
-    <li>EPFO (epfindia.gov.in)</li>
-    <li>TDS (tdscpc.gov.in) / TRACES (traces.gov.in)</li>
-  </ul>
+  <h2>System Diagnostics &amp; Bridge Status</h2>
+  <div class="card">
+    <div class="row">
+      <span class="label">Native Host Connection</span>
+      <span id="hostStatus" class="status-testing">checking…</span>
+    </div>
+    <div class="row">
+      <span class="label">Hardware Token</span>
+      <span id="tokenStatus">—</span>
+    </div>
+    <div class="row">
+      <span class="label">PKCS#11 Driver Module</span>
+      <span id="modulePath" class="val">—</span>
+    </div>
+    <div style="margin-top: 14px; display: flex; align-items: center; gap: 12px;">
+      <button id="btnTest">Test Host Bridge</button>
+      <span id="testResult" style="font-size: 13px;"></span>
+    </div>
+  </div>
 
-  <h2>Prerequisites</h2>
-  <ol>
-    <li>Install the VyomKunji app (<code>vyomkunji.exe</code>) and keep it running.</li>
-    <li>Register the native messaging host (see <code>native-app/install-host.ps1</code>).</li>
-    <li>Attach your DSC token (e.g. ProxKey) — no drivers needed beyond the PKCS#11 module.</li>
-  </ol>
+  <h2>Default Certificate Selection</h2>
+  <div class="card">
+    <label class="label" for="defaultCertSelect">Select preferred certificate for automatic portal assignment:</label>
+    <select id="defaultCertSelect">
+      <option value="">Auto-select / First available</option>
+    </select>
+    <div class="row" style="margin-top: 6px;">
+      <span id="certCount" style="font-size: 12px; color: #6b7280;">Scanning token…</span>
+      <span id="saveNotice" class="save-notice"></span>
+    </div>
+  </div>
 
-  <h2>PKCS#11 module</h2>
-  <p>Auto-detected: <code>C:\Windows\System32\Watchdata\PROXKey CSP India V3.0\WDPKCS.dll</code></p>
-  <p>Override by setting environment variable <code>VYOMKUNJI_PKCS11_MODULE</code>.</p>
+  <h2>Supported Indian Government Portals</h2>
+  <p style="font-size: 13px; color: #4b5563;">VyomKunji automatically intercepts DSC sign triggers across all Central and State government portals:</p>
+  <table>
+    <thead>
+      <tr><th>Portal Name</th><th>Domain</th><th>Category</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Income Tax e-Filing</td><td><code>incometax.gov.in</code></td><td><span class="portal-tag">Direct + Hook</span></td></tr>
+      <tr><td>GST Portal</td><td><code>gst.gov.in</code></td><td><span class="portal-tag">emSigner Hook</span></td></tr>
+      <tr><td>MCA21 v3</td><td><code>mca.gov.in</code></td><td><span class="portal-tag">emBridge Hook</span></td></tr>
+      <tr><td>EPFO Unified Portal</td><td><code>epfindia.gov.in</code></td><td><span class="portal-tag">Universal Hook</span></td></tr>
+      <tr><td>TRACES / TDS</td><td><code>traces.gov.in</code>, <code>tdscpc.gov.in</code></td><td><span class="portal-tag">Universal Hook</span></td></tr>
+      <tr><td>ICEGATE Customs</td><td><code>icegate.gov.in</code></td><td><span class="portal-tag">Universal Hook</span></td></tr>
+      <tr><td>DGFT Foreign Trade</td><td><code>dgft.gov.in</code></td><td><span class="portal-tag">Universal Hook</span></td></tr>
+      <tr><td>GeM (Govt e-Marketplace)</td><td><code>gem.gov.in</code></td><td><span class="portal-tag">Universal Hook</span></td></tr>
+      <tr><td>CPPP &amp; eTenders</td><td><code>eprocure.gov.in</code>, <code>etenders.gov.in</code></td><td><span class="portal-tag">Universal Hook</span></td></tr>
+      <tr><td>Indian Railways IREPS</td><td><code>ireps.gov.in</code></td><td><span class="portal-tag">CrisSigner Hook</span></td></tr>
+      <tr><td>ESIC &amp; eOffice</td><td><code>esic.gov.in</code>, <code>eoffice.gov.in</code></td><td><span class="portal-tag">Universal Hook</span></td></tr>
+      <tr><td>State e-Tenders (MH, KA, WB, TN, UP, etc.)</td><td><code>*tenders.gov.in</code>, <code>*.nic.in</code></td><td><span class="portal-tag">State Portals</span></td></tr>
+    </tbody>
+  </table>
 
-  <h2>Privacy</h2>
-  <p>Everything happens on this computer. The extension collects no data, sends no telemetry,
-     and never sees your token PIN — signing is approved in the desktop app.</p>
+  <h2>Privacy &amp; Security Policy</h2>
+  <p style="font-size: 13px; color: #4b5563;">
+    All signing operations run strictly on your local machine. Private keys never leave your physical USB token hardware.
+    The extension collects zero telemetry and transmits no document contents to any remote server.
+    Token PINs are entered only into the secure desktop application and are immediately wiped from memory.
+  </p>
+
+  <script src="options.js"></script>
 </body>
 </html>

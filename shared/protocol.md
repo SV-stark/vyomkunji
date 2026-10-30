@@ -28,7 +28,7 @@ Request:  `{ "id", "type": "listTokens" }`
 Response: `{ "id", "ok": true, "tokens": [ { "id", "label", "serial", "certs": [certInfo] } ] }`
 
 ### selectCert
-Request:  `{ "id", "type": "selectCert", "certId": "..." }`
+Request:  `{ "id", "type": "selectCert", "certId": "...", "certCN": "..." }`
 Response: `{ "id", "ok": true }`
 
 ### sign

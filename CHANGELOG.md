@@ -6,6 +6,40 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.5.0] - 2026-10-30
+
+### Added
+- **Maximum Indian portal coverage**: Central portals (GeM, ESIC, eOffice, ICEGATE,
+  DGFT, CPPP, IREPS, GST, Income Tax, MCA21, EPFO, TRACES) and all State e-Procurement
+  portals (`*.gov.in`, `*.nic.in`, `tenderwizard.com`, `nprocure.com`) supported with
+  dynamic domain matching.
+- **Full localhost signer emulation (HTTP + WebSocket)**: Main-world hook handles
+  emSigner, emBridge, CrisSigner, and NICDSign ports (8080-8090, 1440-1450, 1580-1590,
+  1625-1635, 26000-26005). Transparently answers health checks (`/isAlive`, `/check`,
+  `/version`) without prompting the user, and serves certificate enumeration
+  (`/getCertificates`, `/listTokens`) with full X.509 DER metadata.
+- **WebSocket signer interception**: `window.WebSocket` constructor hook enables
+  modern WebSocket-based localhost signer workflows on ports 8080 and 1585.
+- **Interactive options page (`options.js`)**: Real-time diagnostic ping test,
+  connected token and certificate inventory, default certificate selector,
+  and comprehensive Indian portal directory.
+- **Extended PKCS#11 vendor matrix**: Auto-detects mToken (CryptoID `mtoken_pkcs11.dll`,
+  `mPki11.dll`), eMudhra (`SignatureP11.dll`, `TrustKeyP11.dll`), Watchdata, and
+  ePass 2003 modules.
+
+### Changed
+- **Wired GUI bridge queries**: `status` and `listTokens` are routed directly to the
+  desktop GUI's in-memory manager over the TCP bridge when running, eliminating
+  PKCS#11 driver re-initialisation lag and hardware token lock contention.
+- **Wired `selectCert` protocol**: End-to-end support for selecting active certificates
+  from the extension popup, options UI, and host protocol.
+- **Origin trust validation**: `origin_trusted` in the desktop GUI recognizes all
+  authentic `*.gov.in`, `*.nic.in`, and verified e-tender domains.
+- **Crate updates**: Updated dependencies via `cargo update` (resolving yanked
+  `clipboard-win` to v5.4.3), verified against `cargo deny check`.
+
+---
+
 ## [0.4.2] - 2026-10-22
 
 Phase 2 subscription portals and Firefox/Chrome connectivity fixes.

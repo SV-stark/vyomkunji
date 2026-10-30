@@ -113,8 +113,8 @@ struct Pending {
     resp: Sender<serde_json::Value>,
 }
 
-/// Origins the extension is allowed to run on. Used only to warn in the
-/// approval card; the browser extension still enforces the real boundary.
+/// Origins the extension is allowed to run on. Used to confirm in the
+/// approval card; the browser extension enforces the real permission boundary.
 fn origin_trusted(origin: &str) -> bool {
     let Some(rest) = origin.strip_prefix("https://") else {
         return false;
@@ -125,15 +125,19 @@ fn origin_trusted(origin: &str) -> bool {
         .map(|(h, _)| h)
         .unwrap_or(host_port)
         .to_ascii_lowercase();
-    const SUFFIXES: &[&str] = &[
-        "incometax.gov.in",
-        "gst.gov.in",
-        "mca.gov.in",
-        "epfindia.gov.in",
-        "tdscpc.gov.in",
-        "traces.gov.in",
-    ];
-    SUFFIXES
+
+    // Any official Indian government domain (.gov.in or .nic.in)
+    if host == "gov.in"
+        || host.ends_with(".gov.in")
+        || host == "nic.in"
+        || host.ends_with(".nic.in")
+    {
+        return true;
+    }
+
+    // Official state / PSU e-tendering and procurement platforms
+    const EXTRA_TRUSTED: &[&str] = &["tenderwizard.com", "tenderwizard.in", "nprocure.com"];
+    EXTRA_TRUSTED
         .iter()
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{}", suffix)))
 }
@@ -200,6 +204,7 @@ struct ConnectOutcome {
 struct App {
     manager: Option<(String, TokenManager)>,
     certs: Vec<CertRow>,
+    tokens: serde_json::Value,
     token_signature: String,
     presence_rx: Option<Receiver<Result<String, String>>>,
     selected: usize,
@@ -355,6 +360,7 @@ impl App {
         let mut app = Self {
             manager: None,
             certs: Vec::new(),
+            tokens: serde_json::Value::Null,
             token_signature: String::new(),
             presence_rx: None,
             selected: 0,
@@ -573,6 +579,7 @@ impl App {
                 let rows = cert_rows_from_tokens(&tokens);
                 let n = rows.len();
                 self.certs = rows;
+                self.tokens = tokens.clone();
                 self.selected = 0;
                 self.token_signature = signature;
                 pkcs11::save_last_module(&module);
@@ -588,6 +595,7 @@ impl App {
             ConnectResult::Failed(e) => {
                 self.manager = None;
                 self.certs.clear();
+                self.tokens = serde_json::Value::Null;
                 self.token_signature.clear();
                 self.selected = 0;
                 self.set_status(Level::Err, format!("Token unavailable: {}", e));
@@ -652,6 +660,7 @@ impl App {
                     // cheap, so reinsertion is picked up without re-initialising
                     // every driver.
                     self.certs.clear();
+                    self.tokens = serde_json::Value::Null;
                     self.token_signature.clear();
                     self.selected = 0;
                     self.set_status(Level::Warn, "Token removed".to_string());
@@ -716,6 +725,62 @@ impl App {
     }
 
     fn accept_request(&mut self, req: serde_json::Value, resp: Sender<serde_json::Value>) {
+        let rtype = req.get("type").and_then(|v| v.as_str()).unwrap_or("sign");
+
+        if rtype == "status" {
+            let _ = resp.send(serde_json::json!({
+                "ok": true,
+                "module": self.manager.as_ref().map(|(m, _)| m.clone()),
+                "token_connected": self.manager.is_some() && !self.certs.is_empty(),
+                "cert_selected": !self.certs.is_empty(),
+            }));
+            return;
+        }
+
+        if rtype == "listTokens" {
+            let tokens_val = if self.tokens.is_null() {
+                serde_json::json!([])
+            } else {
+                self.tokens.clone()
+            };
+            let _ = resp.send(serde_json::json!({
+                "ok": true,
+                "module": self.manager.as_ref().map(|(m, _)| m.clone()),
+                "token_connected": self.manager.is_some() && !self.certs.is_empty(),
+                "tokens": tokens_val,
+            }));
+            return;
+        }
+
+        if rtype == "selectCert" {
+            let cn_target = req
+                .get("certCN")
+                .and_then(|v| v.as_str())
+                .or_else(|| req.get("certId").and_then(|v| v.as_str()))
+                .or_else(|| {
+                    req.get("payload")
+                        .and_then(|p| p.get("certCN"))
+                        .and_then(|v| v.as_str())
+                });
+            if let Some(target) = cn_target
+                && let Some(idx) = self.certs.iter().position(|c| {
+                    c.cn.eq_ignore_ascii_case(target) || c.id == target || c.serial == target
+                })
+            {
+                self.selected = idx;
+            }
+            let _ = resp.send(serde_json::json!({ "ok": true }));
+            return;
+        }
+
+        if rtype == "ping" {
+            let _ = resp.send(serde_json::json!({
+                "ok": true,
+                "version": env!("CARGO_PKG_VERSION")
+            }));
+            return;
+        }
+
         let portal = req
             .get("portal")
             .and_then(|v| v.as_str())
