@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/icon-128.png" width="128" height="128" alt="VyomKunji App Icon" />
+
 # VyomKunji · व्योमकुंजी
 ### Driverless, Java-Free Digital Signature (DSC) Client for Indian Government Portals
 

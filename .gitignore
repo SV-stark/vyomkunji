@@ -4,6 +4,7 @@ native-app/target
 /web-ext-artifacts
 *.exe
 *.png
+!assets/*.png
 !extension/icons/*.png
 !extension-firefox/icons/*.png
 features.md

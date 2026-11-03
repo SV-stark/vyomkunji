@@ -1,9 +1,16 @@
-// Tray / window icon, drawn at runtime so no image decoder is needed.
+// Tray / window icon. Embedded pre-rendered raw RGBA bytes require 0 runtime decoding.
 use egui::Color32;
 
-/// RGBA bytes of the VyomKunji mark: a rounded square in the brand colour with
-/// a white keyhole in it (a keyhole reads as "key" at 16 px).
+/// Raw 32x32 RGBA raster data for the modern VyomKunji squircle icon (4096 bytes).
+const ICON_32_RGBA: &[u8] = include_bytes!("icon_32.rgba");
+
+/// RGBA bytes of the VyomKunji mark.
+/// Returns the modern embedded square brand icon directly for 32x32.
 pub fn app_icon_rgba(size: usize) -> Vec<u8> {
+    if size == 32 && ICON_32_RGBA.len() == 32 * 32 * 4 {
+        return ICON_32_RGBA.to_vec();
+    }
+
     let accent = Color32::from_rgb(0x4C, 0x8D, 0xFF);
     let mut out = vec![0u8; size * size * 4];
     let s = size as f32;

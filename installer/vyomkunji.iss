@@ -29,6 +29,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName},vyomkunji-host.exe
 RestartApplications=no
+SetupIconFile=..\assets\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 VersionInfoVersion={#MyAppVersion}
