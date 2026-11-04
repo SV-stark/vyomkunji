@@ -1127,8 +1127,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-tray"
-version = "0.14.0"
-source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
+version = "0.15.4"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.4#8faf6f99ba782b22916a118c77d1a25d97d1414f"
 dependencies = [
  "ksni",
  "log",
