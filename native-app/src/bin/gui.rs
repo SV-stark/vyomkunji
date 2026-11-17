@@ -9,6 +9,8 @@ mod cms_sign;
 mod icons;
 #[path = "../pkcs11.rs"]
 mod pkcs11;
+#[path = "../portals.rs"]
+mod portals;
 #[path = "../theme.rs"]
 mod theme;
 #[path = "../timeutil.rs"]
@@ -113,33 +115,12 @@ struct Pending {
     resp: Sender<serde_json::Value>,
 }
 
-/// Origins the extension is allowed to run on. Used to confirm in the
-/// approval card; the browser extension enforces the real permission boundary.
-fn origin_trusted(origin: &str) -> bool {
-    let Some(rest) = origin.strip_prefix("https://") else {
-        return false;
-    };
-    let host_port = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = host_port
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(host_port)
-        .to_ascii_lowercase();
+const DEMO_PIN: &str = "1234";
 
-    // Any official Indian government domain (.gov.in or .nic.in)
-    if host == "gov.in"
-        || host.ends_with(".gov.in")
-        || host == "nic.in"
-        || host.ends_with(".nic.in")
-    {
-        return true;
-    }
-
-    // Official state / PSU e-tendering and procurement platforms
-    const EXTRA_TRUSTED: &[&str] = &["tenderwizard.com", "tenderwizard.in", "nprocure.com"];
-    EXTRA_TRUSTED
-        .iter()
-        .any(|suffix| host == *suffix || host.ends_with(&format!(".{}", suffix)))
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ManualSource {
+    File,
+    Text,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -147,6 +128,7 @@ enum Nav {
     Requests,
     Certificates,
     Sign,
+    Portals,
     Activity,
     Settings,
 }
@@ -157,6 +139,7 @@ impl Nav {
             Nav::Requests => "Requests",
             Nav::Certificates => "Certificates",
             Nav::Sign => "Sign manually",
+            Nav::Portals => "Portals",
             Nav::Activity => "Activity",
             Nav::Settings => "Settings",
         }
@@ -165,7 +148,8 @@ impl Nav {
         match self {
             Nav::Requests => "Approve DSC requests from your browser",
             Nav::Certificates => "Certificates found on the connected token",
-            Nav::Sign => "Test the token with arbitrary data",
+            Nav::Sign => "Sign a file or arbitrary text with your token",
+            Nav::Portals => "Indian government portals supported by VyomKunji",
             Nav::Activity => "Audit trail of everything that happened",
             Nav::Settings => "PKCS#11 module and preferences",
         }
@@ -214,11 +198,20 @@ struct App {
     pin: Zeroizing<String>,
     pin_set_at: Option<Instant>,
     pin_timeout: Duration,
+    remember_pin: bool,
+    pin_timeout_min: u32,
+    demo_key: bool,
+    close_to_tray: bool,
     last_token_check: Instant,
     next_auto_try: Instant,
     selected_module: String,
     module_input: String,
     available_modules: Vec<String>,
+    manual_source: ManualSource,
+    manual_file: Option<std::path::PathBuf>,
+    manual_file_len: u64,
+    manual_hash: pkcs11::HashAlgorithm,
+    manual_pkcs7: bool,
     data_input: String,
     status: String,
     status_level: Level,
@@ -226,8 +219,12 @@ struct App {
     nav: Nav,
     signature: String,
     signature_cn: String,
+    signature_pkcs7: bool,
+    signature_demo: bool,
+    signature_source: String,
     bridge_port: Option<u16>,
     history: Vec<String>,
+    portal_counts: std::collections::HashMap<String, usize>,
     // resident-shell state
     hide_intent: bool,
     quit_requested: bool,
@@ -343,6 +340,106 @@ fn cert_rows_from_tokens(tokens: &serde_json::Value) -> Vec<CertRow> {
 
 // ---------------------------------------------------------------- app
 
+fn append_activity_file(level: Level, text: &str) {
+    use std::io::Write;
+    let mut root = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    root.push("VyomKunji");
+    let _ = std::fs::create_dir_all(&root);
+    let path = root.join("activity.log");
+    if let Ok(meta) = std::fs::metadata(&path)
+        && meta.len() > 1024 * 1024
+    {
+        let rotated = root.join("activity.log.1");
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(&path, rotated);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let tag = match level {
+            Level::Info => "INFO",
+            Level::Ok => "OK",
+            Level::Warn => "WARN",
+            Level::Err => "ERR",
+        };
+        let _ = writeln!(file, "{}  [{tag}]  {text}", now_iso());
+    }
+}
+
+fn demo_date_in(days: i64) -> String {
+    let today = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64 / 86400)
+        .unwrap_or(0);
+    let (y, m, d) = timeutil::civil_from_days(today + days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn demo_tokens() -> serde_json::Value {
+    let cert = |id: &str, cn: &str, org: &str, from: i64, to: i64, serial: &str| {
+        serde_json::json!({
+            "id": B64.encode(id),
+            "label": cn,
+            "cn": cn,
+            "subject": format!("C=IN, O={org}, CN={cn}"),
+            "issuer": "C=IN, O=Demo Certifying Authority, CN=Demo Sub CA for Class 3 Individual",
+            "notBefore": demo_date_in(from),
+            "notAfter": demo_date_in(to),
+            "serial": serial,
+            "der": "",
+        })
+    };
+    serde_json::json!([{
+        "id": "slot-demo",
+        "label": "Demo USB key",
+        "serial": "DEMO0001",
+        "certs": [
+            cert("demo-1", "ASHA RAO", "Personal", -488, 242, "1A2B3C4D5E6F7081"),
+            cert("demo-2", "SAMPLE TRADERS PVT LTD", "Sample Traders Pvt Ltd", -760, -30, "0F1E2D3C4B5A6978"),
+        ],
+    }])
+}
+
+fn demo_sign(
+    pin: &str,
+    data: &[u8],
+    opts: &pkcs11::SignOptions<'_>,
+) -> Result<serde_json::Value, String> {
+    if pin != DEMO_PIN {
+        return Err(format!(
+            "login failed: wrong PIN (the demo key's PIN is {DEMO_PIN})"
+        ));
+    }
+    let digest = if opts.already_hashed {
+        data.to_vec()
+    } else {
+        opts.hash.digest(data)
+    };
+    let mut fake = b"DEMO-SIGNATURE-NOT-VALID:".to_vec();
+    fake.extend_from_slice(&digest);
+    let cn = opts.cert_cn.unwrap_or("ASHA RAO").to_string();
+    let mut out = serde_json::json!({
+        "cert": "",
+        "certId": B64.encode("demo-1"),
+        "certCN": cn,
+        "hash": opts.hash.name(),
+        "keyType": "RSA",
+    });
+    if opts.pkcs7 {
+        out["pkcs7"] = serde_json::json!(B64.encode(&fake));
+        out["mechanism"] = serde_json::json!("RSA_PKCS_CMS");
+        out["chain"] = serde_json::json!([]);
+    } else {
+        out["signature"] = serde_json::json!(B64.encode(&fake));
+        out["mechanism"] = serde_json::json!(format!("{}_RSA_PKCS", opts.hash.name()));
+    }
+    Ok(out)
+}
+
 impl App {
     fn new(waker: &fastframe_shell::Waker) -> Self {
         startup_log("App::new begin");
@@ -356,6 +453,27 @@ impl App {
             None => (None, None),
         };
 
+        let cfg = pkcs11::read_config();
+        let get_bool = |k: &str, d: bool| cfg.get(k).and_then(|v| v.as_bool()).unwrap_or(d);
+        let dark = get_bool("darkMode", true);
+        theme::set_base(if dark {
+            fastframe_theme::Base::Dark
+        } else {
+            fastframe_theme::Base::Light
+        });
+        let demo_flag = std::env::args().any(|a| a == "--demo");
+        let demo_env = std::env::var_os("VYOMKUNJI_MOCK").is_some();
+        let demo_key = demo_flag || demo_env || get_bool("demoKey", false);
+        let pin_timeout_min = cfg
+            .get("pinTimeoutMin")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                std::env::var("VYOMKUNJI_PIN_TIMEOUT_MIN")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .unwrap_or(5)
+            .clamp(1, 60) as u32;
         let configured = pkcs11::configured_module_path().unwrap_or_default();
         let mut app = Self {
             manager: None,
@@ -369,18 +487,21 @@ impl App {
             connect_rx: None,
             pin: Zeroizing::new(String::new()),
             pin_set_at: None,
-            pin_timeout: Duration::from_secs(
-                std::env::var("VYOMKUNJI_PIN_TIMEOUT_MIN")
-                    .ok()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(5)
-                    * 60,
-            ),
+            pin_timeout: Duration::from_secs(pin_timeout_min as u64 * 60),
+            remember_pin: get_bool("rememberPin", false),
+            pin_timeout_min,
+            demo_key,
+            close_to_tray: get_bool("closeToTray", true),
             last_token_check: Instant::now(),
             next_auto_try: Instant::now(),
             selected_module: configured.clone(),
             module_input: configured,
             available_modules: Vec::new(),
+            manual_source: ManualSource::Text,
+            manual_file: None,
+            manual_file_len: 0,
+            manual_hash: pkcs11::HashAlgorithm::Sha256,
+            manual_pkcs7: true,
             data_input: "VYOMKUNJI-TEST-PAYLOAD".to_string(),
             status: "Starting…".to_string(),
             status_level: Level::Info,
@@ -388,8 +509,12 @@ impl App {
             nav: Nav::Requests,
             signature: String::new(),
             signature_cn: String::new(),
+            signature_pkcs7: false,
+            signature_demo: false,
+            signature_source: String::new(),
             bridge_port,
             history: Vec::new(),
+            portal_counts: std::collections::HashMap::new(),
             hide_intent: false,
             quit_requested: false,
             wants_show: false,
@@ -510,6 +635,7 @@ impl App {
     }
 
     fn push_log(&mut self, level: Level, text: String) {
+        append_activity_file(level, &text);
         let time = now_clock();
         self.log.insert(0, LogEntry { time, level, text });
         if self.log.len() > 500 {
@@ -532,6 +658,22 @@ impl App {
     }
 
     fn connect_async(&mut self) {
+        if self.demo_key {
+            let tokens = demo_tokens();
+            self.certs = cert_rows_from_tokens(&tokens);
+            self.tokens = tokens;
+            self.manager = None;
+            self.token_signature = "DEMO0001".to_string();
+            self.selected = 0;
+            self.set_status(
+                Level::Warn,
+                format!(
+                    "Demo key active · {} certificate(s) (PIN {DEMO_PIN})",
+                    self.certs.len()
+                ),
+            );
+            return;
+        }
         if self.connect_rx.is_some() {
             return;
         }
@@ -607,6 +749,9 @@ impl App {
     /// reading certificates takes seconds on some tokens, so a changed
     /// presence/serial triggers a background re-connect instead.
     fn refresh_token(&mut self) {
+        if self.demo_key {
+            return;
+        }
         // Throttle.
         if self.last_token_check.elapsed() < Duration::from_secs(3) {
             return;
@@ -690,32 +835,71 @@ impl App {
     }
 
     fn sign_manual(&mut self) {
-        let (_, tm) = match &self.manager {
-            Some(m) => m,
-            None => {
-                self.set_status(Level::Err, "No token connected".to_string());
-                return;
-            }
-        };
+        if !self.demo_key && self.manager.is_none() {
+            self.set_status(Level::Err, "No token connected".to_string());
+            return;
+        }
         if self.pin.is_empty() {
             self.set_status(Level::Warn, "PIN required".to_string());
             return;
         }
+        let (data, source_name) = match self.manual_source {
+            ManualSource::File => {
+                let Some(path) = &self.manual_file else {
+                    self.set_status(Level::Warn, "Choose a file first".to_string());
+                    return;
+                };
+                match std::fs::read(path) {
+                    Ok(bytes) => {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "file".to_string());
+                        (bytes, name)
+                    }
+                    Err(e) => {
+                        self.set_status(Level::Err, format!("Could not read file: {e}"));
+                        return;
+                    }
+                }
+            }
+            ManualSource::Text => (self.data_input.as_bytes().to_vec(), "text".to_string()),
+        };
         let cn = self.current_cert().map(|c| c.cn.clone());
-        let data = self.data_input.as_bytes().to_vec();
-        match tm.sign(&self.pin, &data, cn.as_deref(), false) {
+        let opts = pkcs11::SignOptions {
+            cert_cn: cn.as_deref(),
+            already_hashed: false,
+            hash: self.manual_hash,
+            pkcs7: self.manual_pkcs7,
+        };
+        let result = if self.demo_key {
+            demo_sign(&self.pin, &data, &opts)
+        } else {
+            let (_, tm) = self.manager.as_ref().expect("checked above");
+            tm.sign_with(&self.pin, &data, &opts)
+        };
+        match result {
             Ok(r) => {
-                self.signature = r["signature"].as_str().unwrap_or("").to_string();
+                let key = if self.manual_pkcs7 {
+                    "pkcs7"
+                } else {
+                    "signature"
+                };
+                self.signature = r[key].as_str().unwrap_or("").to_string();
                 self.signature_cn = r["certCN"].as_str().unwrap_or("").to_string();
+                self.signature_pkcs7 = self.manual_pkcs7;
+                self.signature_demo = self.demo_key;
+                self.signature_source = source_name;
                 self.set_status(
                     Level::Ok,
                     format!("Signed {} bytes with {}", data.len(), self.signature_cn),
                 );
-                self.pin_set_at = if self.pin.is_empty() {
-                    None
+                if self.remember_pin {
+                    self.pin_set_at = Some(Instant::now());
                 } else {
-                    Some(Instant::now())
-                };
+                    self.pin = Zeroizing::new(String::new());
+                    self.pin_set_at = None;
+                }
             }
             Err(e) => {
                 self.signature.clear();
@@ -731,7 +915,7 @@ impl App {
             let _ = resp.send(serde_json::json!({
                 "ok": true,
                 "module": self.manager.as_ref().map(|(m, _)| m.clone()),
-                "token_connected": self.manager.is_some() && !self.certs.is_empty(),
+                "token_connected": (self.manager.is_some() || self.demo_key) && !self.certs.is_empty(),
                 "cert_selected": !self.certs.is_empty(),
             }));
             return;
@@ -746,7 +930,7 @@ impl App {
             let _ = resp.send(serde_json::json!({
                 "ok": true,
                 "module": self.manager.as_ref().map(|(m, _)| m.clone()),
-                "token_connected": self.manager.is_some() && !self.certs.is_empty(),
+                "token_connected": (self.manager.is_some() || self.demo_key) && !self.certs.is_empty(),
                 "tokens": tokens_val,
             }));
             return;
@@ -886,33 +1070,39 @@ impl App {
             self.pending = Some(pending);
             return;
         }
-        let (_, tm) = match &self.manager {
-            Some(m) => m,
-            None => {
-                let _ = pending.resp.send(serde_json::json!({
-                    "ok": false,
-                    "error": {"code": "NO_TOKEN", "message": "No token connected"}
-                }));
-                return;
-            }
-        };
+        if !self.demo_key && self.manager.is_none() {
+            let _ = pending.resp.send(serde_json::json!({
+                "ok": false,
+                "error": {"code": "NO_TOKEN", "message": "No token connected"}
+            }));
+            return;
+        }
         let data = pending.data.clone();
-        match tm.sign_with(
-            &self.pin,
-            &data,
-            &pkcs11::SignOptions {
-                cert_cn: pending.cert_cn.as_deref(),
-                already_hashed: pending.already_hashed,
-                hash: pending.hash,
-                pkcs7: pending.pkcs7,
-            },
-        ) {
+        let opts = pkcs11::SignOptions {
+            cert_cn: pending.cert_cn.as_deref(),
+            already_hashed: pending.already_hashed,
+            hash: pending.hash,
+            pkcs7: pending.pkcs7,
+        };
+        let result = if self.demo_key {
+            demo_sign(&self.pin, &data, &opts)
+        } else {
+            let (_, tm) = self.manager.as_ref().expect("checked above");
+            tm.sign_with(&self.pin, &data, &opts)
+        };
+        match result {
             Ok(r) => {
                 let sig = r["signature"].as_str().unwrap_or("").to_string();
                 let cert = r["cert"].as_str().unwrap_or("").to_string();
                 let cn = r["certCN"].as_str().unwrap_or("").to_string();
                 self.signature = sig.clone();
                 self.signature_cn = cn.clone();
+                self.signature_pkcs7 = pending.pkcs7;
+                self.signature_demo = self.demo_key;
+                self.signature_source = pending.portal.clone();
+                if let Some(p) = portals::find(&pending.portal, &pending.origin) {
+                    *self.portal_counts.entry(p.name.to_string()).or_insert(0) += 1;
+                }
                 let mut response = serde_json::json!({
                     "ok": true,
                     "signature": sig,
@@ -931,11 +1121,12 @@ impl App {
                     Level::Ok,
                     format!("Approved & signed for {}", pending.portal),
                 );
-                self.pin_set_at = if self.pin.is_empty() {
-                    None
+                if self.remember_pin {
+                    self.pin_set_at = Some(Instant::now());
                 } else {
-                    Some(Instant::now())
-                };
+                    self.pin = Zeroizing::new(String::new());
+                    self.pin_set_at = None;
+                }
             }
             Err(e) => {
                 let _ = pending.resp.send(serde_json::json!({
@@ -1050,9 +1241,11 @@ impl Resident for App {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Closing the window keeps the app alive in the tray: the signing
-        // bridge must survive so a portal can still reach it.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_requested {
+        // Closing the window keeps the app alive in the tray when close_to_tray is enabled.
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quit_requested
+            && self.close_to_tray
+        {
             self.hide_intent = true;
         }
     }
@@ -1128,6 +1321,7 @@ impl eframe::App for App {
                 Nav::Requests => self.view_requests(ui),
                 Nav::Certificates => self.view_certificates(ui),
                 Nav::Sign => self.view_sign(ui),
+                Nav::Portals => self.view_portals(ui),
                 Nav::Activity => self.view_activity(ui),
                 Nav::Settings => self.view_settings(ui),
             });
@@ -1147,7 +1341,7 @@ impl App {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "S",
+                "V",
                 Weight::Bold.font_id(19.0),
                 egui::Color32::WHITE,
             );
@@ -1183,18 +1377,22 @@ impl App {
                     .button(if is_dark { "Light mode" } else { "Dark mode" })
                     .clicked()
                 {
-                    theme::set_base(if is_dark {
-                        fastframe_theme::Base::Light
-                    } else {
+                    let next_dark = !is_dark;
+                    theme::set_base(if next_dark {
                         fastframe_theme::Base::Dark
+                    } else {
+                        fastframe_theme::Base::Light
                     });
+                    let _ = pkcs11::save_config_key("darkMode", serde_json::json!(next_dark));
                     let ctx = ui.ctx().clone();
                     self.apply_theme(&ctx);
                 }
-                let (dot_col, label) = match (&self.manager, self.pending.is_some()) {
-                    (Some(_), true) => (warn(), "Awaiting approval"),
-                    (Some(_), false) => (ok(), "Ready"),
-                    (None, _) => (err(), "No token"),
+                let (dot_col, label) = match (self.demo_key, &self.manager, self.pending.is_some())
+                {
+                    (_, _, true) => (warn(), "Awaiting approval"),
+                    (true, _, false) => (warn(), "Demo key"),
+                    (false, Some(_), false) => (ok(), "Ready"),
+                    (false, None, false) => (err(), "No token"),
                 };
                 let font = Weight::Medium.font_id(11.5);
                 let galley = ui
@@ -1232,6 +1430,7 @@ impl App {
             (Nav::Requests, self.pending.is_some()),
             (Nav::Certificates, false),
             (Nav::Sign, false),
+            (Nav::Portals, false),
             (Nav::Activity, false),
             (Nav::Settings, false),
         ];
@@ -1378,7 +1577,11 @@ impl App {
                                 .font(Weight::SemiBold.font_id(17.0))
                                 .color(text()),
                         );
-                        chip(ui, &portal, accent());
+                        if let Some(p) = portals::find(&portal, &origin) {
+                            chip(ui, p.name, accent());
+                        } else {
+                            chip(ui, &portal, accent());
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("received {}", received))
@@ -1414,7 +1617,7 @@ impl App {
                                         .color(warn()),
                                 );
                             } else {
-                                let trusted = origin_trusted(&origin);
+                                let trusted = portals::origin_trusted(&origin);
                                 ui.label(
                                     egui::RichText::new(if trusted {
                                         origin.clone()
@@ -1751,22 +1954,92 @@ impl App {
                     .color(text()),
             );
             ui.label(
-                egui::RichText::new("Test the connected token with arbitrary data.")
+                egui::RichText::new("Sign a file or arbitrary text with your connected token.")
                     .size(12.0)
                     .color(text_faint()),
             );
             ui.add_space(12.0);
 
-            ui.label(
-                egui::RichText::new("Data to sign")
-                    .color(text_faint())
-                    .size(12.0),
-            );
-            ui.add(
-                egui::TextEdit::singleline(&mut self.data_input)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("text to sign"),
-            );
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.manual_source, ManualSource::File, "A file");
+                ui.radio_value(&mut self.manual_source, ManualSource::Text, "Some text");
+            });
+            ui.add_space(8.0);
+
+            match self.manual_source {
+                ManualSource::File => {
+                    ui.horizontal(|ui| {
+                        if ui.button("Choose file…").clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .set_title("Choose file to sign")
+                                .pick_file()
+                        {
+                            self.manual_file_len =
+                                std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                            self.manual_file = Some(path);
+                        }
+                        match &self.manual_file {
+                            Some(p) => {
+                                let name = p
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                ui.label(egui::RichText::new(name).size(12.5).color(text()));
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "({} bytes)",
+                                        self.manual_file_len
+                                    ))
+                                    .size(11.5)
+                                    .color(text_faint()),
+                                );
+                            }
+                            None => {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "No file chosen (PDF, XML, JSON, anything)",
+                                    )
+                                    .size(12.0)
+                                    .color(text_faint()),
+                                );
+                            }
+                        }
+                    });
+                }
+                ManualSource::Text => {
+                    ui.label(
+                        egui::RichText::new("Data to sign")
+                            .color(text_faint())
+                            .size(12.0),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.data_input)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("text to sign"),
+                    );
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Format").color(text_faint()).size(12.0));
+                ui.radio_value(&mut self.manual_pkcs7, true, "Detached PKCS#7 (.p7s)");
+                ui.radio_value(&mut self.manual_pkcs7, false, "Raw signature (.sig)");
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new("Hash").color(text_faint()).size(12.0));
+                egui::ComboBox::from_id_salt("manual_hash")
+                    .selected_text(self.manual_hash.name())
+                    .show_ui(ui, |ui| {
+                        for h in [
+                            pkcs11::HashAlgorithm::Sha256,
+                            pkcs11::HashAlgorithm::Sha384,
+                            pkcs11::HashAlgorithm::Sha512,
+                            pkcs11::HashAlgorithm::Sha1,
+                        ] {
+                            ui.selectable_value(&mut self.manual_hash, h, h.name());
+                        }
+                    });
+            });
 
             ui.add_space(10.0);
             ui.label(
@@ -1822,7 +2095,24 @@ impl App {
                             .color(text()),
                     );
                     chip(ui, &self.signature_cn, accent2());
+                    if !self.signature_source.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&self.signature_source)
+                                .size(11.5)
+                                .color(text_faint()),
+                        );
+                    }
                 });
+                if self.signature_demo {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Made with the demo key: this is not a valid signature.",
+                        )
+                        .size(12.0)
+                        .color(warn()),
+                    );
+                }
                 ui.add_space(8.0);
                 ui.add(
                     egui::TextEdit::multiline(&mut self.signature)
@@ -1830,11 +2120,128 @@ impl App {
                         .desired_width(f32::INFINITY)
                         .font(egui::TextStyle::Monospace),
                 );
-                if ui.button("Copy signature").clicked() {
-                    ui.ctx().copy_text(self.signature.clone());
-                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let save_label = if self.signature_pkcs7 {
+                        "Save .p7s…"
+                    } else {
+                        "Save .sig…"
+                    };
+                    if ui.button(save_label).clicked()
+                        && let Ok(bytes) = B64.decode(&self.signature)
+                    {
+                        let ext = if self.signature_pkcs7 { "p7s" } else { "sig" };
+                        let default_name = match &self.manual_file {
+                            Some(p) => format!(
+                                "{}.{ext}",
+                                p.file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "signature".to_string())
+                            ),
+                            None => format!("signature.{ext}"),
+                        };
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Save signature")
+                            .set_file_name(&default_name)
+                            .save_file()
+                        {
+                            match std::fs::write(&path, bytes) {
+                                Ok(()) => self.set_status(
+                                    Level::Ok,
+                                    format!("Saved signature to {}", path.display()),
+                                ),
+                                Err(e) => {
+                                    self.set_status(Level::Err, format!("Could not save: {e}"))
+                                }
+                            }
+                        }
+                    }
+                    if ui.button("Copy signature").clicked() {
+                        ui.ctx().copy_text(self.signature.clone());
+                    }
+                });
             });
         }
+    }
+
+    fn view_portals(&mut self, ui: &mut egui::Ui) {
+        self.view_header(ui);
+
+        ui.label(
+            egui::RichText::new(
+                "The browser extension catches each portal's DSC sign button and localhost signer calls, and sends them here. No Java and no vendor utility are needed.",
+            )
+            .size(12.5)
+            .color(text_dim()),
+        );
+        ui.add_space(12.0);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let width = ui.available_width();
+            let cols = if width > 760.0 {
+                3
+            } else if width > 480.0 {
+                2
+            } else {
+                1
+            };
+            let card_w = ((width - 14.0 * (cols as f32 - 1.0)) / cols as f32).max(200.0);
+            for row in portals::PORTALS.chunks(cols) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    for portal in row {
+                        let signed = self.portal_counts.get(portal.name).copied().unwrap_or(0);
+                        theme::card_frame(None).show(ui, |ui| {
+                            ui.set_width(card_w - 30.0);
+                            ui.set_min_height(104.0);
+                            ui.horizontal(|ui| {
+                                avatar(
+                                    ui,
+                                    portal.short,
+                                    34.0,
+                                    if portal.filings { accent() } else { accent2() },
+                                );
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(portal.name)
+                                            .font(Weight::SemiBold.font_id(13.5))
+                                            .color(text()),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(portal.domains.join(", "))
+                                            .family(egui::FontFamily::Monospace)
+                                            .size(10.5)
+                                            .color(text_faint()),
+                                    );
+                                });
+                            });
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(portal.what)
+                                    .size(12.0)
+                                    .color(text_dim()),
+                            );
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                chip(
+                                    ui,
+                                    if portal.filings {
+                                        "Citizen filings"
+                                    } else {
+                                        "Procurement & trade"
+                                    },
+                                    if portal.filings { accent() } else { accent2() },
+                                );
+                                if signed > 0 {
+                                    chip(ui, &format!("{signed} signed"), ok());
+                                }
+                            });
+                        });
+                    }
+                });
+                ui.add_space(10.0);
+            }
+        });
     }
 
     /// Build a privacy-conscious diagnostics blob for support requests. It
@@ -1930,6 +2337,18 @@ impl App {
                     self.selected_module = p.clone();
                     self.connect();
                 }
+                if ui.button("Browse for driver…").clicked()
+                    && let Some(path) = rfd::FileDialog::new()
+                        .set_title("Choose PKCS#11 driver")
+                        .add_filter("PKCS#11 library", &["dll", "so", "dylib"])
+                        .pick_file()
+                {
+                    let p = path.to_string_lossy().to_string();
+                    self.module_input = p.clone();
+                    let _ = pkcs11::save_configured_module(Some(&p));
+                    self.selected_module = p;
+                    self.connect();
+                }
                 if ui.button("Auto-detect").clicked() {
                     self.module_input.clear();
                     self.selected_module.clear();
@@ -1968,8 +2387,71 @@ impl App {
             ui.add_space(10.0);
             if let Some((m, _)) = &self.manager {
                 kv(ui, "Active module", m, true);
+            } else if self.demo_key {
+                kv(ui, "Active module", "Demo key (no driver)", false);
             } else {
                 kv(ui, "Active module", "(none)", false);
+            }
+
+            ui.add_space(14.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new("PIN & Window preferences")
+                    .font(Weight::SemiBold.font_id(14.0))
+                    .color(text()),
+            );
+            ui.add_space(6.0);
+            if ui
+                .checkbox(&mut self.remember_pin, "Remember PIN in memory between signatures")
+                .changed()
+            {
+                let _ = pkcs11::save_config_key(
+                    "rememberPin",
+                    serde_json::json!(self.remember_pin),
+                );
+                if !self.remember_pin {
+                    self.pin = Zeroizing::new(String::new());
+                    self.pin_set_at = None;
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Forget PIN after")
+                        .size(12.5)
+                        .color(text_dim()),
+                );
+                let resp =
+                    ui.add(egui::Slider::new(&mut self.pin_timeout_min, 1..=60).suffix(" min"));
+                if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                    self.pin_timeout = Duration::from_secs(self.pin_timeout_min as u64 * 60);
+                    let _ = pkcs11::save_config_key(
+                        "pinTimeoutMin",
+                        serde_json::json!(self.pin_timeout_min),
+                    );
+                }
+            });
+            if ui
+                .checkbox(
+                    &mut self.close_to_tray,
+                    "Keep running in the tray when the window is closed",
+                )
+                .changed()
+            {
+                let _ = pkcs11::save_config_key(
+                    "closeToTray",
+                    serde_json::json!(self.close_to_tray),
+                );
+            }
+            if ui
+                .checkbox(
+                    &mut self.demo_key,
+                    format!("Use a demo key instead of a real one (PIN {DEMO_PIN}, signatures are not valid)"),
+                )
+                .changed()
+            {
+                let _ = pkcs11::save_config_key("demoKey", serde_json::json!(self.demo_key));
+                self.connect();
             }
 
             ui.add_space(14.0);
@@ -2075,10 +2557,16 @@ impl eframe::App for Window {
 }
 
 fn native_options() -> eframe::NativeOptions {
+    let icon = std::sync::Arc::new(egui::IconData {
+        rgba: icons::app_icon_rgba(32),
+        width: 32,
+        height: 32,
+    });
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1020.0, 680.0])
             .with_min_inner_size([860.0, 560.0])
+            .with_icon(icon)
             .with_title("VyomKunji — DSC Token"),
         ..Default::default()
     }

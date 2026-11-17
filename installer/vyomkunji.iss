@@ -2,7 +2,7 @@
 ; Build with ISCC.exe installer\vyomkunji.iss
 
 #define MyAppName "VyomKunji"
-#define MyAppVersion "0.5.0"
+#define MyAppVersion "0.6.0"
 #define MyAppPublisher "VyomKunji Contributors"
 #define MyAppURL "https://github.com/SV-stark/vyomkunji"
 #define MyAppExeName "vyomkunji.exe"
@@ -30,7 +30,7 @@ CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName},vyomkunji-host.exe
 RestartApplications=no
 SetupIconFile=..\assets\app.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\app.ico
 UninstallDisplayName={#MyAppName}
 VersionInfoVersion={#MyAppVersion}
 VersionInfoProductName={#MyAppName}
@@ -43,6 +43,7 @@ Name: "autostart"; Description: "Start VyomKunji when I sign in"; GroupDescripti
 [Files]
 Source: "..\native-app\target\release\vyomkunji.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\native-app\target\release\vyomkunji-host.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\assets\app.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\native-app\install-host.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\native-app\com.vyomkunji.host.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\native-app\com.vyomkunji.host.firefox.json"; DestDir: "{app}"; Flags: ignoreversion
@@ -67,8 +68,8 @@ Type: filesandordirs; Name: "{app}\extension"
 Type: filesandordirs; Name: "{app}\extension-firefox"
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app.ico"; Tasks: desktopicon
 
 [Code]
 function InitializeUninstall(): Boolean;

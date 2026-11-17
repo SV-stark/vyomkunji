@@ -6,6 +6,25 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.6.0] - 2026-11-17
+
+### Added
+- **Native file & driver picker (`rfd`)**: Sign any file directly from the **Sign manually** tab (`Choose file…`), export detached PKCS#7 (`.p7s`) or raw (`.sig`) signatures (`Save .p7s…` / `Save .sig…`), and browse for custom PKCS#11 modules (`Browse for driver…`) in Settings.
+- **Built-in Demo Key mode**: Toggleable mock USB key (`DEMO_PIN = "1234"`, `--demo` flag, or `VYOMKUNJI_MOCK`) for testing portal approvals and manual signing without physical DSC hardware.
+- **Portals directory tab (`portals.rs`)**: Dedicated **Portals** view listing all 12 supported Indian government and procurement portals with per-portal signed counts and portal badges on incoming requests.
+- **Persisted user preferences**: `rememberPin`, `pinTimeoutMin` (1–60 min slider), `closeToTray`, `darkMode`, and `demoKey` are now persisted in `config.json`.
+- **Persistent activity log & bridge client**: Rotated `activity.log` written to `%LOCALAPPDATA%\VyomKunji\activity.log`, plus `native-app/tests/bridge_client.ps1` for local bridge smoke testing.
+- **Embedded Windows application icon**: Added `native-app/build.rs` (`winresource`) to embed `assets/app.ico` into `vyomkunji.exe` and `vyomkunji-host.exe`.
+
+### Changed
+- **Dependencies**: Merged `fastframe-*` crates to `v0.15.4` and ran `cargo update` (36 crates updated in `Cargo.lock`).
+- **Config persistence (`pkcs11.rs`)**: Replaced manual string-based `config.json` read/write with `serde_json` (`read_config`, `save_config_key`) to fix Windows backslash escaping and preserve all settings keys, with fallback support for legacy unescaped configs.
+
+### Fixed
+- **Installer & taskbar/tray icons**: Updated `installer/vyomkunji.iss` to install `app.ico` and set `IconFilename` / `UninstallDisplayIcon`, set `ViewportBuilder::with_icon` in the GUI to match the 32×32 tray icon, and updated the top-bar badge from `"S"` to `"V"`.
+
+---
+
 ## [0.5.0] - 2026-10-30
 
 ### Added

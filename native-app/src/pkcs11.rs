@@ -211,54 +211,69 @@ pub fn config_path() -> Option<std::path::PathBuf> {
 /// Read a user-configured PKCS#11 module path from config.json, if present
 /// and pointing at an existing file.
 pub fn configured_module_path() -> Option<String> {
-    let path = config_path()?;
-    let text = std::fs::read_to_string(path).ok()?;
-    // Minimal JSON parse without pulling in a parser dependency: look for
-    // "pkcs11Module": "...".
-    let key = "\"pkcs11Module\"";
-    let idx = text.find(key)?;
-    let rest = &text[idx + key.len()..];
-    let colon = rest.find(':')?;
-    let rest = rest[colon + 1..].trim_start();
-    if !rest.starts_with('"') {
-        return None;
-    }
-    let rest = &rest[1..];
-    let end = rest.find('"')?;
-    let val = rest[..end].to_string();
-    if val.is_empty() {
-        return None;
-    }
-    if std::path::Path::new(&val).is_file() {
+    let val = read_config()
+        .get("pkcs11Module")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .or_else(legacy_configured_module)?;
+    if !val.is_empty() && std::path::Path::new(&val).is_file() {
         Some(val)
     } else {
         None
     }
 }
 
-/// Persist (or clear) the user-configured PKCS#11 module path.
+/// Older builds wrote the module path without escaping its backslashes, which
+/// is not valid JSON. Read that form with a plain text scan.
+fn legacy_configured_module() -> Option<String> {
+    let text = std::fs::read_to_string(config_path()?).ok()?;
+    let key = "\"pkcs11Module\"";
+    let rest = &text[text.find(key)? + key.len()..];
+    let rest = rest[rest.find(':')? + 1..].trim_start().strip_prefix('"')?;
+    Some(rest[..rest.find('"')?].to_string())
+}
+
+/// The whole user config as a JSON object (empty when missing or unreadable).
+pub fn read_config() -> Value {
+    config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+/// Set (or remove, with `Value::Null`) one key in the user config, keeping the
+/// other keys.
 #[allow(dead_code)]
-pub fn save_configured_module(path: Option<&str>) -> std::io::Result<()> {
+pub fn save_config_key(key: &str, value: Value) -> std::io::Result<()> {
     let cfg = config_path()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set"))?;
     if let Some(parent) = cfg.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let value = match path {
-        Some(p) if !p.trim().is_empty() => p.trim().to_string(),
-        _ => String::new(),
-    };
-    // Preserve any other keys by rewriting a minimal object; config only holds
-    // this key today.
-    let json = if value.is_empty() {
-        "{}".to_string()
+    let mut all = read_config();
+    if all.get("pkcs11Module").is_none()
+        && let Some(legacy) = legacy_configured_module()
+    {
+        all["pkcs11Module"] = json!(legacy);
+    }
+    let obj = all.as_object_mut().expect("config is an object");
+    if value.is_null() {
+        obj.remove(key);
     } else {
-        format!(
-            "{{\"pkcs11Module\":\"{}\"}}",
-            value.replace("\\\\", "\\\\\\\\").replace('"', "\\\\\"")
-        )
-    };
-    std::fs::write(cfg, json)
+        obj.insert(key.to_string(), value);
+    }
+    let text = serde_json::to_string_pretty(&all).map_err(std::io::Error::other)?;
+    std::fs::write(cfg, text)
+}
+
+/// Persist (or clear) the user-configured PKCS#11 module path.
+#[allow(dead_code)]
+pub fn save_configured_module(path: Option<&str>) -> std::io::Result<()> {
+    match path.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => save_config_key("pkcs11Module", json!(p)),
+        None => save_config_key("pkcs11Module", Value::Null),
+    }
 }
 
 /// Remember which module last produced a token, so the next launch can try it
