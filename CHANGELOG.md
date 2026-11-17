@@ -6,6 +6,21 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.6.1] - 2026-11-17
+
+### Added
+- **Non-blocking background signing**: `sign_manual()` and `approve_pending()` now run PKCS#11 and demo-key signing on background worker threads with a spinner, keeping the desktop UI responsive.
+- **Request queue**: Concurrent browser signing requests are queued in order (with a `+N queued` badge on the approval card) and promoted automatically after approval or cancellation.
+- **Single-instance guard**: Re-launching `vyomkunji.exe` while already running in the tray signals the active instance (`show`) to focus its window and exits cleanly.
+- **UI version display**: Top bar now displays the live app version (`v0.6.1`).
+
+### Changed
+- **Shared library crate (`lib.rs`)**: Extracted shared modules (`bridge`, `cms_sign`, `icons`, `pkcs11`, `portals`, `theme`, `timeutil`) into `native-app/src/lib.rs`, eliminating duplicate compilation across binaries.
+- **Broader Indian portal coverage**: Added `https://*.gov.in/*`, `https://*.nic.in/*`, `tenderwizard.com`, `tenderwizard.in`, and `nprocure.com` to both Chrome MV3 and Firefox MV3 manifests, with `world: "MAIN"` `document_start` injection for `interceptor-main.js`.
+- **Extension test coverage**: Wired `tests/interceptor.test.mjs` into `npm test` in `extension/package.json` (19/19 tests).
+
+---
+
 ## [0.6.0] - 2026-11-17
 
 ### Added

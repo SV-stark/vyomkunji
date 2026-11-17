@@ -1454,9 +1454,12 @@ impl App {
                         .color(text()),
                 );
                 ui.label(
-                    egui::RichText::new("India G2C · DSC signing")
-                        .font(Weight::Regular.font_id(11.0))
-                        .color(text_faint()),
+                    egui::RichText::new(concat!(
+                        "India G2C · DSC signing · v",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .font(Weight::Regular.font_id(11.0))
+                    .color(text_faint()),
                 );
             });
 
