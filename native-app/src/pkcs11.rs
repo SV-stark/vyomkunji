@@ -141,7 +141,7 @@ impl HashAlgorithm {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeyKind {
+pub enum KeyKind {
     Rsa,
     Ec,
 }

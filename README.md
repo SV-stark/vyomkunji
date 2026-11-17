@@ -79,10 +79,10 @@ Digitally signing returns, forms, and compliance filings across Indian Governmen
 │                    vyomkunji.exe                            │
 │  Desktop UI (egui 0.36 + fastframe resident tray shell)     │
 │   - Payload Digest Preview (SHA-1 / 256 / 384 / 512)        │
-│   - Portal & Browser Origin Confirmation                    │
-│   - Token & Certificate Selection                           │
-│   - Secure PIN Entry Dialog                                 │
-│   - Raw Signature or Detached CMS/PKCS#7 Output             │
+│   - Portal & Browser Origin Confirmation + Portals Tab      │
+│   - Token, Certificate & Custom Driver Picker (rfd)         │
+│   - Manual File/Text Signing (.p7s / .sig) & Demo Key Mode  │
+│   - Persisted Preferences (PIN timeout, tray, dark mode)    │
 └───────────────────────────┬─────────────────────────────────┘
                             │ PKCS#11 API (cryptoki)
                             ▼
@@ -142,7 +142,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 
 # Execute test suite
-cargo test
+cargo test --all-targets
 
 # Supply-chain check (advisories, licenses, banned crates, sources)
 cargo deny check
@@ -156,7 +156,7 @@ From the repository root, the extension parity and versioning helpers can be run
 powershell -File tools\sync-extensions.ps1     # Chrome -> Firefox shared sources
 powershell -File tools\check-extensions.ps1   # byte-level parity + manifest/JS checks
 powershell -File tools\check-version.ps1      # single-source version guard
-node --test extension/tests/background.test.mjs
+npm --prefix extension test                   # background, interceptor, and manifest tests
 ```
 
 Compiled binaries will be generated in `target/release/`:
@@ -232,9 +232,15 @@ vyomkunji/
 │   │   ├── cms_sign.rs      # Detached CMS/PKCS#7 SignedData assembly
 │   │   ├── bridge.rs        # Token-authenticated localhost JSON-lines bridge
 │   │   ├── theme.rs         # Dynamic dark/light color palette engine
+│   │   ├── portals.rs       # Supported Indian government portal registry & origin trust
 │   │   └── timeutil.rs      # Dependency-free civil timestamp & date conversions
+│   ├── tests/
+│   │   └── bridge_client.ps1 # PowerShell smoke-test client for the GUI TCP bridge
+│   ├── build.rs             # Windows .ico resource embedding (winresource)
 │   ├── Cargo.toml           # Rust package manifest
 │   └── install-host.ps1     # Native messaging host registry installer
+├── installer/
+│   └── vyomkunji.iss        # Inno Setup one-click Windows installer script
 ├── shared/                  # Common protocol documentation
 │   └── protocol.md          # Extension ↔ Native App JSON wire format
 ├── tools/                   # Version, parity, signing, and sync helpers

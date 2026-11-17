@@ -16,7 +16,8 @@ const firefox = JSON.parse(
   readFileSync(join(root, "extension-firefox", "manifest.json"), "utf8")
 );
 
-const HOST_PATTERN = /^https:\/\/(\*\.)?[a-z0-9.-]+\.(gov|nic)\.in\/\*$/;
+const HOST_PATTERN =
+  /^https:\/\/(\*\.)?(([a-z0-9.-]+\.)?(gov|nic)\.in|tenderwizard\.(com|in)|nprocure\.com)\/\*$/;
 
 function hostEntries(manifest) {
   return manifest.host_permissions || [];

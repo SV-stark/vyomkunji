@@ -76,12 +76,67 @@
     "https://*.etender.up.nic.in/*",
     "https://etender.up.nic.in/*",
     "https://*.govtprocurement.delhi.gov.in/*",
-    "https://govtprocurement.delhi.gov.in/*"
+    "https://govtprocurement.delhi.gov.in/*",
+    "https://*.tenderwizard.com/*",
+    "https://tenderwizard.com/*",
+    "https://*.tenderwizard.in/*",
+    "https://tenderwizard.in/*",
+    "https://*.nprocure.com/*",
+    "https://nprocure.com/*",
+    "https://*.gov.in/*",
+    "https://*.nic.in/*"
   ],
   "background": {
     "scripts": ["src/background.js"]
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://*.incometax.gov.in/*", "https://incometax.gov.in/*",
+        "https://*.gst.gov.in/*", "https://gst.gov.in/*",
+        "https://*.mca.gov.in/*", "https://mca.gov.in/*",
+        "https://*.epfindia.gov.in/*", "https://epfindia.gov.in/*",
+        "https://*.tdscpc.gov.in/*", "https://tdscpc.gov.in/*",
+        "https://*.traces.gov.in/*", "https://traces.gov.in/*",
+        "https://*.ireps.gov.in/*", "https://ireps.gov.in/*",
+        "https://*.eprocure.gov.in/*", "https://eprocure.gov.in/*",
+        "https://*.etenders.gov.in/*", "https://etenders.gov.in/*",
+        "https://*.icegate.gov.in/*", "https://icegate.gov.in/*",
+        "https://*.dgft.gov.in/*", "https://dgft.gov.in/*",
+        "https://*.gem.gov.in/*", "https://gem.gov.in/*",
+        "https://*.esic.gov.in/*", "https://esic.gov.in/*",
+        "https://*.eoffice.gov.in/*", "https://eoffice.gov.in/*",
+        "https://*.mahatenders.gov.in/*", "https://mahatenders.gov.in/*",
+        "https://*.mahagst.gov.in/*", "https://mahagst.gov.in/*",
+        "https://*.wbtenders.gov.in/*", "https://wbtenders.gov.in/*",
+        "https://*.tntenders.gov.in/*", "https://tntenders.gov.in/*",
+        "https://*.mptenders.gov.in/*", "https://mptenders.gov.in/*",
+        "https://*.jharkhandtenders.gov.in/*", "https://jharkhandtenders.gov.in/*",
+        "https://*.uktenders.gov.in/*", "https://uktenders.gov.in/*",
+        "https://*.jktenders.gov.in/*", "https://jktenders.gov.in/*",
+        "https://*.hptenders.gov.in/*", "https://hptenders.gov.in/*",
+        "https://*.assamtenders.gov.in/*", "https://assamtenders.gov.in/*",
+        "https://*.tendersodisha.gov.in/*", "https://tendersodisha.gov.in/*",
+        "https://*.etenders.kerala.gov.in/*", "https://etenders.kerala.gov.in/*",
+        "https://*.apeprocurement.gov.in/*", "https://apeprocurement.gov.in/*",
+        "https://*.tender.telangana.gov.in/*", "https://tender.telangana.gov.in/*",
+        "https://*.kppp.karnataka.gov.in/*", "https://kppp.karnataka.gov.in/*",
+        "https://*.eproc.karnataka.gov.in/*", "https://eproc.karnataka.gov.in/*",
+        "https://*.eproc.rajasthan.gov.in/*", "https://eproc.rajasthan.gov.in/*",
+        "https://*.eproc2.bihar.gov.in/*", "https://eproc2.bihar.gov.in/*",
+        "https://*.eproc.punjab.gov.in/*", "https://eproc.punjab.gov.in/*",
+        "https://*.etenders.hry.nic.in/*", "https://etenders.hry.nic.in/*",
+        "https://*.etender.up.nic.in/*", "https://etender.up.nic.in/*",
+        "https://*.govtprocurement.delhi.gov.in/*", "https://govtprocurement.delhi.gov.in/*",
+        "https://*.tenderwizard.com/*", "https://tenderwizard.com/*",
+        "https://*.tenderwizard.in/*", "https://tenderwizard.in/*",
+        "https://*.nprocure.com/*", "https://nprocure.com/*",
+        "https://*.gov.in/*", "https://*.nic.in/*"
+      ],
+      "js": ["src/content/interceptor-main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": ["https://*.incometax.gov.in/*", "https://incometax.gov.in/*"],
       "js": ["src/content/incometax.js"],
@@ -123,7 +178,11 @@
         "https://*.eproc.punjab.gov.in/*", "https://eproc.punjab.gov.in/*",
         "https://*.etenders.hry.nic.in/*", "https://etenders.hry.nic.in/*",
         "https://*.etender.up.nic.in/*", "https://etender.up.nic.in/*",
-        "https://*.govtprocurement.delhi.gov.in/*", "https://govtprocurement.delhi.gov.in/*"
+        "https://*.govtprocurement.delhi.gov.in/*", "https://govtprocurement.delhi.gov.in/*",
+        "https://*.tenderwizard.com/*", "https://tenderwizard.com/*",
+        "https://*.tenderwizard.in/*", "https://tenderwizard.in/*",
+        "https://*.nprocure.com/*", "https://nprocure.com/*",
+        "https://*.gov.in/*", "https://*.nic.in/*"
       ],
       "js": ["src/content/generic.js"],
       "run_at": "document_idle"
@@ -172,7 +231,11 @@
         "https://*.eproc.punjab.gov.in/*", "https://eproc.punjab.gov.in/*",
         "https://*.etenders.hry.nic.in/*", "https://etenders.hry.nic.in/*",
         "https://*.etender.up.nic.in/*", "https://etender.up.nic.in/*",
-        "https://*.govtprocurement.delhi.gov.in/*", "https://govtprocurement.delhi.gov.in/*"
+        "https://*.govtprocurement.delhi.gov.in/*", "https://govtprocurement.delhi.gov.in/*",
+        "https://*.tenderwizard.com/*", "https://tenderwizard.com/*",
+        "https://*.tenderwizard.in/*", "https://tenderwizard.in/*",
+        "https://*.nprocure.com/*", "https://nprocure.com/*",
+        "https://*.gov.in/*", "https://*.nic.in/*"
       ]
     }
   ],

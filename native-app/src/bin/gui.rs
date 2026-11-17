@@ -1,20 +1,7 @@
 // Signer GUI — egui/eframe 0.36 on fastframe: tray, resident shell, native
 // text rendering, JSON palettes. Run: cargo run --bin gui
 #![windows_subsystem = "windows"]
-#[path = "../bridge.rs"]
-mod bridge;
-#[path = "../cms_sign.rs"]
-mod cms_sign;
-#[path = "../icons.rs"]
-mod icons;
-#[path = "../pkcs11.rs"]
-mod pkcs11;
-#[path = "../portals.rs"]
-mod portals;
-#[path = "../theme.rs"]
-mod theme;
-#[path = "../timeutil.rs"]
-mod timeutil;
+use vyomkunji::{bridge, icons, pkcs11, portals, theme, timeutil};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use eframe::egui;
@@ -185,6 +172,16 @@ struct ConnectOutcome {
     result: ConnectResult,
 }
 
+enum SignJob {
+    Manual {
+        source_name: String,
+        byte_len: usize,
+        pkcs7: bool,
+        demo: bool,
+    },
+    Pending(Box<Pending>),
+}
+
 struct App {
     manager: Option<(String, TokenManager)>,
     certs: Vec<CertRow>,
@@ -193,6 +190,8 @@ struct App {
     presence_rx: Option<Receiver<Result<String, String>>>,
     selected: usize,
     pending: Option<Pending>,
+    queue: std::collections::VecDeque<Pending>,
+    sign_rx: Option<Receiver<(SignJob, Result<serde_json::Value, String>)>>,
     gui_rx: Receiver<GuiRequest>,
     connect_rx: Option<Receiver<ConnectOutcome>>,
     pin: Zeroizing<String>,
@@ -483,6 +482,8 @@ impl App {
             presence_rx: None,
             selected: 0,
             pending: None,
+            queue: std::collections::VecDeque::new(),
+            sign_rx: None,
             gui_rx: rx,
             connect_rx: None,
             pin: Zeroizing::new(String::new()),
@@ -835,6 +836,9 @@ impl App {
     }
 
     fn sign_manual(&mut self) {
+        if self.sign_rx.is_some() {
+            return;
+        }
         if !self.demo_key && self.manager.is_none() {
             self.set_status(Level::Err, "No token connected".to_string());
             return;
@@ -865,47 +869,42 @@ impl App {
             }
             ManualSource::Text => (self.data_input.as_bytes().to_vec(), "text".to_string()),
         };
+        let byte_len = data.len();
         let cn = self.current_cert().map(|c| c.cn.clone());
-        let opts = pkcs11::SignOptions {
-            cert_cn: cn.as_deref(),
-            already_hashed: false,
-            hash: self.manual_hash,
-            pkcs7: self.manual_pkcs7,
-        };
-        let result = if self.demo_key {
-            demo_sign(&self.pin, &data, &opts)
-        } else {
-            let (_, tm) = self.manager.as_ref().expect("checked above");
-            tm.sign_with(&self.pin, &data, &opts)
-        };
-        match result {
-            Ok(r) => {
-                let key = if self.manual_pkcs7 {
-                    "pkcs7"
-                } else {
-                    "signature"
-                };
-                self.signature = r[key].as_str().unwrap_or("").to_string();
-                self.signature_cn = r["certCN"].as_str().unwrap_or("").to_string();
-                self.signature_pkcs7 = self.manual_pkcs7;
-                self.signature_demo = self.demo_key;
-                self.signature_source = source_name;
-                self.set_status(
-                    Level::Ok,
-                    format!("Signed {} bytes with {}", data.len(), self.signature_cn),
-                );
-                if self.remember_pin {
-                    self.pin_set_at = Some(Instant::now());
-                } else {
-                    self.pin = Zeroizing::new(String::new());
-                    self.pin_set_at = None;
-                }
-            }
-            Err(e) => {
-                self.signature.clear();
-                self.set_status(Level::Err, format!("Sign failed: {}", e));
-            }
-        }
+        let pin = Zeroizing::new((*self.pin).clone());
+        let hash = self.manual_hash;
+        let pkcs7 = self.manual_pkcs7;
+        let demo = self.demo_key;
+        let tm = self.manager.as_ref().map(|(_, tm)| tm.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.sign_rx = Some(rx);
+        self.set_status(Level::Info, "Signing on token…".to_string());
+        let waker = self.waker.clone();
+        std::thread::spawn(move || {
+            let opts = pkcs11::SignOptions {
+                cert_cn: cn.as_deref(),
+                already_hashed: false,
+                hash,
+                pkcs7,
+            };
+            let result = if demo {
+                demo_sign(&pin, &data, &opts)
+            } else if let Some(tm) = tm {
+                tm.sign_with(&pin, &data, &opts)
+            } else {
+                Err("No token connected".to_string())
+            };
+            let _ = tx.send((
+                SignJob::Manual {
+                    source_name,
+                    byte_len,
+                    pkcs7,
+                    demo,
+                },
+                result,
+            ));
+            waker.wake();
+        });
     }
 
     fn accept_request(&mut self, req: serde_json::Value, resp: Sender<serde_json::Value>) {
@@ -962,6 +961,19 @@ impl App {
                 "ok": true,
                 "version": env!("CARGO_PKG_VERSION")
             }));
+            return;
+        }
+
+        if rtype == "show" {
+            self.wants_show = true;
+            self.waker.wake();
+            if let Some(ctx) = &self.ctx {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                    egui::UserAttentionType::Informational,
+                ));
+            }
+            let _ = resp.send(serde_json::json!({ "ok": true }));
             return;
         }
 
@@ -1028,15 +1040,7 @@ impl App {
             self.history.truncate(50);
         }
 
-        if self.pending.is_some() {
-            let _ = resp.send(serde_json::json!({
-                "ok": false,
-                "error": {"code": "BUSY", "message": "Another request is awaiting approval"}
-            }));
-            return;
-        }
-
-        self.pending = Some(Pending {
+        let item = Pending {
             portal: portal.clone(),
             origin,
             bytes: bytes.len(),
@@ -1048,7 +1052,21 @@ impl App {
             pkcs7,
             data: bytes,
             resp,
-        });
+        };
+
+        if self.pending.is_some() {
+            self.queue.push_back(item);
+            if let Some(tray) = self.tray.as_mut() {
+                tray.set_tooltip(format!(
+                    "VyomKunji\nWaiting for approval (+{} queued)",
+                    self.queue.len()
+                ));
+            }
+            self.waker.wake();
+            return;
+        }
+
+        self.pending = Some(item);
         self.nav = Nav::Requests;
         self.wants_show = true;
         if self.manager.is_none() {
@@ -1060,7 +1078,26 @@ impl App {
         self.waker.wake();
     }
 
+    fn promote_next_pending(&mut self) {
+        if self.pending.is_none()
+            && let Some(next) = self.queue.pop_front()
+        {
+            let portal = next.portal.clone();
+            self.pending = Some(next);
+            if let Some(tray) = self.tray.as_mut() {
+                tray.set_tooltip(format!("VyomKunji\nWaiting for approval: {portal}"));
+            }
+        } else if self.pending.is_none()
+            && let Some(tray) = self.tray.as_mut()
+        {
+            tray.set_tooltip("VyomKunji");
+        }
+    }
+
     fn approve_pending(&mut self) {
+        if self.sign_rx.is_some() {
+            return;
+        }
         let pending = match self.pending.take() {
             Some(p) => p,
             None => return,
@@ -1075,69 +1112,133 @@ impl App {
                 "ok": false,
                 "error": {"code": "NO_TOKEN", "message": "No token connected"}
             }));
+            self.promote_next_pending();
             return;
         }
         let data = pending.data.clone();
-        let opts = pkcs11::SignOptions {
-            cert_cn: pending.cert_cn.as_deref(),
-            already_hashed: pending.already_hashed,
-            hash: pending.hash,
-            pkcs7: pending.pkcs7,
+        let cert_cn = pending.cert_cn.clone();
+        let already_hashed = pending.already_hashed;
+        let hash = pending.hash;
+        let pkcs7 = pending.pkcs7;
+        let pin = Zeroizing::new((*self.pin).clone());
+        let demo = self.demo_key;
+        let tm = self.manager.as_ref().map(|(_, tm)| tm.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.sign_rx = Some(rx);
+        self.set_status(Level::Info, format!("Signing for {}…", pending.portal));
+        let waker = self.waker.clone();
+        std::thread::spawn(move || {
+            let opts = pkcs11::SignOptions {
+                cert_cn: cert_cn.as_deref(),
+                already_hashed,
+                hash,
+                pkcs7,
+            };
+            let result = if demo {
+                demo_sign(&pin, &data, &opts)
+            } else if let Some(tm) = tm {
+                tm.sign_with(&pin, &data, &opts)
+            } else {
+                Err("No token connected".to_string())
+            };
+            let _ = tx.send((SignJob::Pending(Box::new(pending)), result));
+            waker.wake();
+        });
+    }
+
+    fn poll_sign(&mut self) {
+        let (job, result) = match self.sign_rx.as_ref().map(|rx| rx.try_recv()) {
+            None => return,
+            Some(Ok(v)) => {
+                self.sign_rx = None;
+                v
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return,
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.sign_rx = None;
+                return;
+            }
         };
-        let result = if self.demo_key {
-            demo_sign(&self.pin, &data, &opts)
-        } else {
-            let (_, tm) = self.manager.as_ref().expect("checked above");
-            tm.sign_with(&self.pin, &data, &opts)
-        };
-        match result {
-            Ok(r) => {
-                let sig = r["signature"].as_str().unwrap_or("").to_string();
-                let cert = r["cert"].as_str().unwrap_or("").to_string();
-                let cn = r["certCN"].as_str().unwrap_or("").to_string();
-                self.signature = sig.clone();
-                self.signature_cn = cn.clone();
-                self.signature_pkcs7 = pending.pkcs7;
-                self.signature_demo = self.demo_key;
-                self.signature_source = pending.portal.clone();
-                if let Some(p) = portals::find(&pending.portal, &pending.origin) {
-                    *self.portal_counts.entry(p.name.to_string()).or_insert(0) += 1;
-                }
-                let mut response = serde_json::json!({
-                    "ok": true,
-                    "signature": sig,
-                    "cert": cert,
-                    "certId": r["certId"],
-                    "certCN": cn,
-                    "signedAt": now_iso(),
-                });
-                for key in ["pkcs7", "chain", "mechanism", "hash", "keyType"] {
-                    if let Some(value) = r.get(key) {
-                        response[key] = value.clone();
+
+        match job {
+            SignJob::Manual {
+                source_name,
+                byte_len,
+                pkcs7,
+                demo,
+            } => match result {
+                Ok(r) => {
+                    let key = if pkcs7 { "pkcs7" } else { "signature" };
+                    self.signature = r[key].as_str().unwrap_or("").to_string();
+                    self.signature_cn = r["certCN"].as_str().unwrap_or("").to_string();
+                    self.signature_pkcs7 = pkcs7;
+                    self.signature_demo = demo;
+                    self.signature_source = source_name;
+                    self.set_status(
+                        Level::Ok,
+                        format!("Signed {} bytes with {}", byte_len, self.signature_cn),
+                    );
+                    if self.remember_pin {
+                        self.pin_set_at = Some(Instant::now());
+                    } else {
+                        self.pin = Zeroizing::new(String::new());
+                        self.pin_set_at = None;
                     }
                 }
-                let _ = pending.resp.send(response);
-                self.set_status(
-                    Level::Ok,
-                    format!("Approved & signed for {}", pending.portal),
-                );
-                if self.remember_pin {
-                    self.pin_set_at = Some(Instant::now());
-                } else {
-                    self.pin = Zeroizing::new(String::new());
-                    self.pin_set_at = None;
+                Err(e) => {
+                    self.signature.clear();
+                    self.set_status(Level::Err, format!("Sign failed: {}", e));
                 }
+            },
+            SignJob::Pending(pending) => {
+                match result {
+                    Ok(r) => {
+                        let sig = r["signature"].as_str().unwrap_or("").to_string();
+                        let cert = r["cert"].as_str().unwrap_or("").to_string();
+                        let cn = r["certCN"].as_str().unwrap_or("").to_string();
+                        self.signature = sig.clone();
+                        self.signature_cn = cn.clone();
+                        self.signature_pkcs7 = pending.pkcs7;
+                        self.signature_demo = self.demo_key;
+                        self.signature_source = pending.portal.clone();
+                        if let Some(p) = portals::find(&pending.portal, &pending.origin) {
+                            *self.portal_counts.entry(p.name.to_string()).or_insert(0) += 1;
+                        }
+                        let mut response = serde_json::json!({
+                            "ok": true,
+                            "signature": sig,
+                            "cert": cert,
+                            "certId": r["certId"],
+                            "certCN": cn,
+                            "signedAt": now_iso(),
+                        });
+                        for key in ["pkcs7", "chain", "mechanism", "hash", "keyType"] {
+                            if let Some(value) = r.get(key) {
+                                response[key] = value.clone();
+                            }
+                        }
+                        let _ = pending.resp.send(response);
+                        self.set_status(
+                            Level::Ok,
+                            format!("Approved & signed for {}", pending.portal),
+                        );
+                        if self.remember_pin {
+                            self.pin_set_at = Some(Instant::now());
+                        } else {
+                            self.pin = Zeroizing::new(String::new());
+                            self.pin_set_at = None;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = pending.resp.send(serde_json::json!({
+                            "ok": false,
+                            "error": {"code": "SIGN_FAILED", "message": e}
+                        }));
+                        self.set_status(Level::Err, format!("Sign failed: {}", e));
+                    }
+                }
+                self.promote_next_pending();
             }
-            Err(e) => {
-                let _ = pending.resp.send(serde_json::json!({
-                    "ok": false,
-                    "error": {"code": "SIGN_FAILED", "message": e}
-                }));
-                self.set_status(Level::Err, format!("Sign failed: {}", e));
-            }
-        }
-        if let Some(tray) = self.tray.as_mut() {
-            tray.set_tooltip("VyomKunji");
         }
     }
 
@@ -1149,9 +1250,7 @@ impl App {
             }));
             self.set_status(Level::Warn, format!("Request from {} cancelled", p.portal));
         }
-        if let Some(tray) = self.tray.as_mut() {
-            tray.set_tooltip("VyomKunji");
-        }
+        self.promote_next_pending();
     }
 
     /// Take requests that arrived since the last frame.
@@ -1159,6 +1258,7 @@ impl App {
         while let Ok((req, resp)) = self.gui_rx.try_recv() {
             self.accept_request(req, resp);
         }
+        self.poll_sign();
         self.poll_connect();
         self.poll_presence();
         self.refresh_token();
@@ -1582,6 +1682,9 @@ impl App {
                         } else {
                             chip(ui, &portal, accent());
                         }
+                        if !self.queue.is_empty() {
+                            chip(ui, &format!("+{} queued", self.queue.len()), warn());
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("received {}", received))
@@ -1693,28 +1796,41 @@ impl App {
                     }
 
                     ui.add_space(14.0);
+                    let signing = self.sign_rx.is_some();
                     ui.horizontal(|ui| {
-                        let approve = ui.add_sized(
-                            [190.0, 40.0],
+                        let approve = ui.add_enabled(
+                            !signing,
                             egui::Button::new(
-                                egui::RichText::new("Approve & Sign")
-                                    .font(Weight::SemiBold.font_id(13.5))
-                                    .color(egui::Color32::WHITE),
+                                egui::RichText::new(if signing {
+                                    "Signing…"
+                                } else {
+                                    "Approve & Sign"
+                                })
+                                .font(Weight::SemiBold.font_id(13.5))
+                                .color(egui::Color32::WHITE),
                             )
-                            .fill(accent()),
+                            .fill(accent())
+                            .min_size(egui::vec2(190.0, 40.0)),
                         );
                         if approve.clicked() {
                             self.approve_pending();
                         }
-                        let cancel = ui.add_sized([120.0, 40.0], egui::Button::new("Cancel"));
+                        let cancel = ui.add_enabled(
+                            !signing,
+                            egui::Button::new("Cancel").min_size(egui::vec2(120.0, 40.0)),
+                        );
                         if cancel.clicked() {
                             self.cancel();
                         }
-                        ui.label(
-                            egui::RichText::new("Esc to cancel")
-                                .size(11.0)
-                                .color(text_faint()),
-                        );
+                        if signing {
+                            ui.add(egui::Spinner::new());
+                        } else {
+                            ui.label(
+                                egui::RichText::new("Esc to cancel")
+                                    .size(11.0)
+                                    .color(text_faint()),
+                            );
+                        }
                     });
                 });
             }
@@ -2062,20 +2178,28 @@ impl App {
             }
 
             ui.add_space(14.0);
+            let signing = self.sign_rx.is_some();
             ui.horizontal(|ui| {
-                let b = ui.add_sized(
-                    [200.0, 38.0],
+                let b = ui.add_enabled(
+                    !signing,
                     egui::Button::new(
-                        egui::RichText::new("Sign with selected certificate")
-                            .font(Weight::SemiBold.font_id(13.0))
-                            .color(egui::Color32::WHITE),
+                        egui::RichText::new(if signing {
+                            "Signing…"
+                        } else {
+                            "Sign with selected certificate"
+                        })
+                        .font(Weight::SemiBold.font_id(13.0))
+                        .color(egui::Color32::WHITE),
                     )
-                    .fill(accent()),
+                    .fill(accent())
+                    .min_size(egui::vec2(200.0, 38.0)),
                 );
                 if b.clicked() {
                     self.sign_manual();
                 }
-                if let Some(c) = self.current_cert() {
+                if signing {
+                    ui.add(egui::Spinner::new());
+                } else if let Some(c) = self.current_cert() {
                     ui.label(
                         egui::RichText::new(format!("using {}", c.cn))
                             .size(11.5)
@@ -2619,6 +2743,16 @@ fn install_crash_hook() {
 fn main() -> Result<(), eframe::Error> {
     install_crash_hook();
     startup_log("main() entered");
+    // Single-instance guard: if a resident VyomKunji is already listening on
+    // the local bridge, ask it to show its window and exit cleanly.
+    if bridge::request_gui(
+        &serde_json::json!({ "type": "show" }),
+        Duration::from_millis(500),
+    )
+    .is_some_and(|v| v.get("ok").and_then(|o| o.as_bool()) == Some(true))
+    {
+        return Ok(());
+    }
     let waker = fastframe_shell::Waker::default();
     let app = App::new(&waker);
     fastframe_shell::Shell::new(app, &waker)
