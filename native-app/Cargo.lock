@@ -1151,8 +1151,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-text"
-version = "0.15.4"
-source = "git+https://github.com/crmne/fastframe?tag=v0.15.4#8faf6f99ba782b22916a118c77d1a25d97d1414f"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "egui",
  "zbus",
