@@ -24,6 +24,12 @@ updates:
         patterns:
           - "cryptoki"
           - "x509-parser"
+      # All five fastframe crates are released from one repository at the same
+      # tag. Bumping one at a time collides on Cargo.toml/Cargo.lock lines and
+      # leaves a mixed-version graph, so land them together.
+      rust-fastframe:
+        patterns:
+          - "fastframe-*"
     ignore:
       # Keep the der family on the generation cms 0.2.x supports. These
       # constraints can be lifted together once cms 0.3 is stable.
@@ -33,7 +39,7 @@ updates:
         versions: [">=0.3"]
       - dependency-name: "const-oid"
         versions: [">=0.10"]
-      # egui/eframe are pinned by the fastframe crates (v0.14.0 -> egui
+      # egui/eframe are pinned by the fastframe crates (v0.17.0 -> egui
       # 0.36.2). Bumping egui alone puts two egui versions in the graph and
       # breaks every call into the fastframe API.
       - dependency-name: "egui"

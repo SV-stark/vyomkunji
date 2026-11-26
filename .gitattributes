@@ -1,0 +1,8 @@
+# Keep text files LF in both the index and the working tree. Without this,
+# core.autocrlf=true on Windows rewrites Cargo-generated files (notably
+# native-app/Cargo.lock) to CRLF and produces churn in every diff.
+* text=auto eol=lf
+
+# Binary assets must never be normalized.
+*.ico binary
+*.png binary
